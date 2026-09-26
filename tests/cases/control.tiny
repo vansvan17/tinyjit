@@ -1,0 +1,38 @@
+fn side(x) { print(x); return x; }
+fn classify(n) {
+  if n < 0 { return -1; } else if n == 0 { return 0; } else { return 1; }
+}
+fn main() {
+  print(classify(-5));       // expect: -1
+  print(classify(0));        // expect: 0
+  print(classify(9));        // expect: 1
+  // && and || short-circuit and normalize to 0/1
+  print(side(0) && side(1)); // expect: 0
+                             // expect: 0
+  print(side(2) && side(3)); // expect: 2
+                             // expect: 3
+                             // expect: 1
+  print(side(4) || side(5)); // expect: 4
+                             // expect: 1
+  print(side(0) || side(0)); // expect: 0
+                             // expect: 0
+                             // expect: 0
+  let i = 0;
+  let total = 0;
+  while i < 5 {
+    let j = 0;
+    while j < i { total = total + j; j = j + 1; }
+    i = i + 1;
+  }
+  print(total);              // expect: 10
+  let n = 27;
+  let steps = 0;
+  while n != 1 {
+    if n % 2 == 0 { n = n / 2; } else { n = 3 * n + 1; }
+    steps = steps + 1;
+  }
+  print(steps);              // expect: 111
+  if 1 { print(100); }       // expect: 100
+  if 0 { print(200); }
+  if nil { print(300); }     // expect: 300
+}

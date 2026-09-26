@@ -1,0 +1,8 @@
+fn add(a, b) { return a + b; }
+fn main() {
+  print(add(1, 2));        // expect: 3
+  let i = 0;
+  while i < 200 { add(i, i); i = i + 1; }
+  print(i);                // expect: 200
+  print(add(nil, 1));      // expect-error: type error
+}

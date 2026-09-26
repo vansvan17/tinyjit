@@ -1,0 +1,28 @@
+// A linked-list prime sieve: allocation-heavy, exercises the collector.
+fn range(a, b) { let l = nil; while b > a { b = b - 1; l = cons(b, l); } return l; }
+fn filter_multiples(p, l) {
+  if is_nil(l) { return nil; }
+  let rest = filter_multiples(p, cdr(l));
+  if car(l) % p == 0 { return rest; }
+  return cons(car(l), rest);
+}
+fn count(l) { let n = 0; while is_pair(l) { n = n + 1; l = cdr(l); } return n; }
+fn primes(n) {
+  let l = range(2, n);
+  let out = nil;
+  while is_pair(l) {
+    let p = car(l);
+    out = cons(p, out);
+    l = filter_multiples(p, cdr(l));
+  }
+  return out;
+}
+fn main() {
+  let round = 0;
+  let total = 0;
+  while round < 20 {
+    total = total + count(primes(3000));
+    round = round + 1;
+  }
+  print(total);
+}

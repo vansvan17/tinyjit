@@ -1,0 +1,32 @@
+fn f(x) {
+  while 1 {
+    if x > 10 { return x; }
+    x = x * 2;
+  }
+  print(999);
+  return 0;
+}
+fn g(x) {
+  return x + 1;
+  print(123);
+  let y = 5;
+  return y;
+}
+fn h(n) {
+  let i = 0;
+  while i < n {
+    if i == 3 { return i * 100; }
+    i = i + 1;
+  }
+  return -1;
+}
+fn main() {
+  print(f(1));   // expect: 16
+  print(g(1));   // expect: 2
+  print(h(10));  // expect: 300
+  print(h(2));   // expect: -1
+  if 0 { print(1 / 0); }
+  let k = 0;
+  while k < 150 { k = k + f(k + 1) - f(k + 1) + 1; }
+  print(k);      // expect: 150
+}

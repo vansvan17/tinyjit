@@ -1,0 +1,7 @@
+fn div(a, b) { return a / b; }
+fn main() {
+  let i = 1;
+  while i < 200 { div(100, i); i = i + 1; }
+  print(div(100, 7));      // expect: 14
+  print(div(1, 0));        // expect-error: division by zero
+}

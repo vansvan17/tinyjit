@@ -1,0 +1,28 @@
+fn fib(n) { if n < 2 { return n; } return fib(n - 1) + fib(n - 2); }
+fn is_even(n) { if n == 0 { return 1; } return is_odd(n - 1); }
+fn is_odd(n) { if n == 0 { return 0; } return is_even(n - 1); }
+fn six(a, b, c, d, e, f) { return a * 100000 + b * 10000 + c * 1000 + d * 100 + e * 10 + f; }
+fn seven(a, b, c, d, e, f, g) { return six(a, b, c, d, e, f) * 10 + g; }
+fn rot(a, b, c, d, e, f) { return six(f, a, b, c, d, e); }
+fn noret(x) { x = x + 1; }
+fn ack(m, n) {
+  if m == 0 { return n + 1; }
+  if n == 0 { return ack(m - 1, 1); }
+  return ack(m - 1, ack(m, n - 1));
+}
+fn depth(n) { if n == 0 { return 0; } return 1 + depth(n - 1); }
+fn main() {
+  print(fib(20));                 // expect: 6765
+  print(is_even(101));            // expect: 0
+  print(is_odd(101));             // expect: 1
+  print(six(1, 2, 3, 4, 5, 6));   // expect: 123456
+  print(seven(1, 2, 3, 4, 5, 6, 7)); // expect: 1234567
+  print(rot(1, 2, 3, 4, 5, 6));   // expect: 612345
+  print(noret(5));                // expect: 0
+  print(ack(2, 3));               // expect: 9
+  print(depth(10000));            // expect: 10000
+  let i = 0;
+  let s = 0;
+  while i < 300 { s = s + rot(i, 1, 2, 3, 4, 5); i = i + 1; }
+  print(s);                       // expect: 598870200
+}

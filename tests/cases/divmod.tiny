@@ -1,0 +1,46 @@
+// Division and remainder truncate toward zero (like C and x86 idiv).
+// Constant divisors take the shift path in the JIT; expected values here
+// were computed independently in Python.
+fn divs(x, d) { return x / d; }
+fn main() {
+  print(7 / 2);   // expect: 3
+  print(7 % 2);   // expect: 1
+  print(-7 / 2);   // expect: -3
+  print(-7 % 2);   // expect: -1
+  print(7 / -2);   // expect: -3
+  print(7 % -2);   // expect: 1
+  print(-7 / -2);   // expect: 3
+  print(-7 % -2);   // expect: -1
+  print(9 / 4);   // expect: 2
+  print(9 % 4);   // expect: 1
+  print(-9 / 4);   // expect: -2
+  print(-9 % 4);   // expect: -1
+  print(-1 / 8);   // expect: 0
+  print(-1 % 8);   // expect: -1
+  print(1 / 8);   // expect: 0
+  print(1 % 8);   // expect: 1
+  print(-8 / 8);   // expect: -1
+  print(-8 % 8);   // expect: 0
+  print(-9 / 8);   // expect: -1
+  print(-9 % 8);   // expect: -1
+  print(100 / 3);   // expect: 33
+  print(100 % 3);   // expect: 1
+  print(-100 / 3);   // expect: -33
+  print(-100 % 3);   // expect: -1
+  print(123456789 / 1024);   // expect: 120563
+  print(123456789 % 1024);   // expect: 277
+  print(-123456789 / 1024);   // expect: -120563
+  print(-123456789 % 1024);   // expect: -277
+  print(5 / 1);   // expect: 5
+  print(5 % 1);   // expect: 0
+  print(-5 / 1);   // expect: -5
+  print(-5 % 1);   // expect: 0
+  let i = -9;
+  let acc = 0;
+  while i <= 9 { acc = acc * 31 + i / 2 + (i % 4) * 7 + i / 8 + (i % 3) * 5 + divs(i, 4); acc = acc % 1000000007; i = i + 1; }
+  print(acc);   // expect: -722644649
+  let m = -4611686018427387903 - 1;
+  print(m / 2);   // expect: -2305843009213693952
+  print(m % 1073741824);   // expect: 0
+  print(m / -1);   // expect: -4611686018427387904
+}

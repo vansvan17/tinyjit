@@ -1,0 +1,25 @@
+// Churns through far more cells than the initial heap while keeping a
+// long-lived structure alive; a collector that frees a live cell corrupts it.
+fn range(n) { let l = nil; while n > 0 { n = n - 1; l = cons(n, l); } return l; }
+fn sum(l) { let s = 0; while is_pair(l) { s = s + car(l); l = cdr(l); } return s; }
+fn tree(d) { if d == 0 { return nil; } return cons(tree(d - 1), tree(d - 1)); }
+fn count(t) { if is_nil(t) { return 1; } return count(car(t)) + count(cdr(t)); }
+fn main() {
+  let keep = range(2000);
+  let t = tree(10);
+  let i = 0;
+  let acc = 0;
+  while i < 200 {
+    let tmp = range(100);      // garbage after this iteration
+    acc = acc + sum(tmp);
+    i = i + 1;
+  }
+  print(acc);          // expect: 990000
+  print(sum(keep));    // expect: 1999000
+  print(count(t));     // expect: 1024
+  let pairs = nil;
+  i = 0;
+  while i < 50 { pairs = cons(cons(i, i * i), pairs); let junk = range(50); i = i + 1; }
+  print(car(pairs));   // expect: (49 . 2401)
+  print(sum(keep));    // expect: 1999000
+}

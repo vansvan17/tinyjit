@@ -1,0 +1,5 @@
+fn main() {
+  let x = cons(1, 2);
+  print(x == x);           // expect: 1
+  print(x < 3);            // expect-error: type error
+}

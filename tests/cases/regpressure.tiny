@@ -1,0 +1,16 @@
+// More values live across calls than there are callee-saved registers,
+// so the JIT has to spill.
+fn id(x) { return x; }
+fn many(n) {
+  let a = n + 1; let b = n + 2; let c = n + 3; let d = n + 4; let e = n + 5;
+  let f = n + 6; let g = n + 7; let h = n + 8; let i = n + 9; let j = n + 10;
+  let k = id(a) + id(b);
+  let m = id(c) * id(d);
+  return a + b + c + d + e + f + g + h + i + j + k + m;
+}
+fn main() {
+  let i = 0; let s = 0;
+  while i < 200 { s = s + many(i); i = i + 1; }
+  print(s);              // expect: 3038800
+  print(many(1000));     // expect: 1019070
+}

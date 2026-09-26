@@ -1,0 +1,39 @@
+// The two classic out-of-SSA traps: the swap problem (phis that read each
+// other) and the lost-copy problem (a phi value live past the loop).
+fn swap_loop(n) {
+  let a = 1;
+  let b = 2;
+  let i = 0;
+  while i < n { let t = a; a = b; b = t; i = i + 1; }
+  return a * 10 + b;
+}
+fn rotate3(n) {
+  let a = 1; let b = 2; let c = 3;
+  let i = 0;
+  while i < n { let t = a; a = b; b = c; c = t; i = i + 1; }
+  return a * 100 + b * 10 + c;
+}
+fn lost_copy(n) {
+  let x = 0;
+  let prev = 0;
+  while x < n { prev = x; x = x + 1; }
+  return prev * 1000 + x;
+}
+fn fibloop(n) {
+  let a = 0; let b = 1; let i = 0;
+  while i < n { let t = a + b; a = b; b = t; i = i + 1; }
+  return a;
+}
+fn main() {
+  print(swap_loop(0));   // expect: 12
+  print(swap_loop(1));   // expect: 21
+  print(swap_loop(7));   // expect: 21
+  print(rotate3(1));     // expect: 231
+  print(rotate3(2));     // expect: 312
+  print(rotate3(3));     // expect: 123
+  print(lost_copy(5));   // expect: 4005
+  print(fibloop(50));    // expect: 12586269025
+  let i = 0; let s = 0;
+  while i < 500 { s = s + swap_loop(i) + rotate3(i); i = i + 1; }
+  print(s);              // expect: 119160
+}

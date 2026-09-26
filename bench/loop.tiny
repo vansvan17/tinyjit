@@ -1,0 +1,27 @@
+// Loop-heavy: Collatz step counts for 1..300000. The inner loop lives in its
+// own function so tiered mode sees it get hot (there is no on-stack
+// replacement, so a loop that never returns to the interpreter would only be
+// compiled with --jit=eager).
+fn collatz(n) {
+  let steps = 0;
+  while n != 1 {
+    if n % 2 == 0 { n = n / 2; } else { n = 3 * n + 1; }
+    steps = steps + 1;
+  }
+  return steps;
+}
+fn main() {
+  let i = 1;
+  let best = 0;
+  let best_i = 0;
+  let total = 0;
+  while i < 300000 {
+    let steps = collatz(i);
+    total = total + steps;
+    if steps > best { best = steps; best_i = i; }
+    i = i + 1;
+  }
+  print(best_i);
+  print(best);
+  print(total);
+}

@@ -1,0 +1,23 @@
+fn main() {
+  let x = 1;
+  {
+    let x = 2;
+    print(x);        // expect: 2
+    x = 3;
+    print(x);        // expect: 3
+  }
+  print(x);          // expect: 1
+  let i = 0;
+  while i < 3 {
+    let x = i * 10;  // a fresh x each iteration, shadowing the outer one
+    x = x + 1;
+    print(x);        // expect: 1
+                     // expect: 11
+                     // expect: 21
+    i = i + 1;
+  }
+  print(x);          // expect: 1
+  let y = x + 1;
+  let y = y * 5;     // re-declaration shadows
+  print(y);          // expect: 10
+}
