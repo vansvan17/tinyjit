@@ -1,15 +1,16 @@
-// x86-64 JIT for MIR.
+// ARM64 JIT for MIR (Apple Silicon; Linux arm64 works too, for testing).
 //
-// Pipeline per function: MIR -> linear scan over 9 machine registers ->
-// instruction selection straight to machine code -> mmap'd buffer, flipped
-// from writable to executable (W^X) once the bytes are in.
+// Pipeline per function: MIR -> linear scan over 22 machine registers ->
+// instruction selection straight to A64 machine code -> a MAP_JIT region,
+// writable or executable for this thread but never both (W^X).
 //
-// Compiled code follows the System V AMD64 ABI, so the interpreter can call
-// it through an ordinary C function pointer and it can call the C runtime
-// (rt_print, rt_error). A function is compiled together with every function
-// it can reach, so JIT code never has to call back into the interpreter.
-// Functions that allocate (cons) are left to the interpreter: the JIT emits
-// no stack maps, so the collector could not find roots in JIT frames.
+// Compiled code follows the Apple arm64 calling convention, so the
+// interpreter can call it through an ordinary C function pointer and it can
+// call the C runtime (rt_print, rt_error). A function is compiled together
+// with every function it can reach, so JIT code never has to call back into
+// the interpreter. Functions that allocate (cons) are left to the
+// interpreter: the JIT emits no stack maps, so the collector could not find
+// roots in JIT frames.
 #pragma once
 #include <string>
 #include <vector>
@@ -23,11 +24,11 @@ struct JitSymbol {
 };
 
 struct JitReloc {
-  size_t offset;  // of an 8-byte absolute address inside the code region
+  size_t offset;  // of a `bl` to a runtime helper, from the start of the code region
   std::string symbol;
 };
 
-// Always true on x86-64 Linux; false where jit.cpp builds its stub.
+// True on arm64; false where jit.cpp builds its stub (every function interpreted).
 bool jit_supported();
 
 class JIT {
@@ -37,7 +38,7 @@ class JIT {
   bool compile(int fidx);  // false if fidx (or something it calls) cannot be jitted
   void compile_all();
 
-  bool write_elf(const std::string& path, std::string& err) const;
+  bool write_object(const std::string& path, std::string& err) const;  // Mach-O .o
   bool write_raw(const std::string& path) const;
 
   size_t code_bytes() const { return used_; }
@@ -59,6 +60,7 @@ class JIT {
   size_t used_ = 0;
   std::vector<JitSymbol> syms_;
   std::vector<JitReloc> relocs_;
+  std::vector<size_t> literals_;  // 8-byte runtime addresses inside trampolines
 
   bool collect_group(int f, std::vector<char>& in_group, std::vector<int>& group);
 };

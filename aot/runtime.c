@@ -1,12 +1,12 @@
-// Minimal runtime for linking an object from `tinyjit --emit-elf=prog.o`
-// into a standalone executable:
+// Minimal runtime for linking an object from `tinyjit --emit-obj=prog.o`
+// into a standalone macOS executable:
 //
-//   build/tinyjit --emit-elf=prog.o prog.tiny
-//   cc -no-pie aot/runtime.c prog.o -o prog && ./prog
+//   build/tinyjit --emit-obj=prog.o prog.tiny
+//   cc aot/runtime.c prog.o -o prog && ./prog
 //
-// -no-pie because the object uses absolute 64-bit relocations (R_X86_64_64)
-// in .text for its calls into this runtime; a PIE would need text
-// relocations. Only programs whose functions are all jittable (no cons) can
+// The object's calls into this file are `bl _rt_print` / `bl _rt_error`
+// with ARM64_RELOC_BRANCH26 relocations, which the linker resolves like any
+// other call. Only programs whose functions are all jittable (no cons) can
 // be linked this way, since allocating functions are never compiled.
 #include <stdint.h>
 #include <stdio.h>

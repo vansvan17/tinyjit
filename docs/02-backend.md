@@ -1,8 +1,8 @@
 # Backend: instruction selection, register allocation, the JIT
 
-Files: `src/mir.{h,cpp}`, `src/regalloc.{h,cpp}`, `src/bytecode.cpp`, `src/jit.cpp`, `src/x86.h`
+Files: `src/mir.{h,cpp}`, `src/regalloc.{h,cpp}`, `src/bytecode.cpp`, `src/jit.cpp`, `src/a64.h`
 
-Both backends (the bytecode VM and the x86-64 JIT) consume the same
+Both backends (the bytecode VM and the ARM64 JIT) consume the same
 lower-level IR, MIR, and share one register allocator. The VM just has a lot
 more registers.
 
@@ -15,18 +15,20 @@ one:
 - **Immediates.** `i + 1` becomes `add v3, #1` instead of materializing `1`
   into a register. Commutative operations and comparisons with the constant
   on the left are flipped (`1 < x` becomes `x > #1`). The VM gets `ADDK`,
-  `LTK` and friends; the JIT gets `add r, imm32` and `cmp r, imm32`.
+  `LTK` and friends; the JIT gets `add x, x, #imm` and `cmp x, #imm` when the
+  constant fits ARM64's 12-bit immediate field, and builds it in a scratch
+  register otherwise.
 - **Compare and branch fusion.** A comparison used only by the branch right
   after it becomes a single `br_lt a, b -> T, F`. Without this the result of
-  `i < n` would be materialized as 0 or 1 in a register (`setl`, `movzx`,
-  shift to tag it) and then tested again. With it, the JIT emits `cmp; jl`.
+  `i < n` would be materialized as 0 or 1 in a register (`cset`, then a
+  shift to tag it) and then tested again. With it, the JIT emits `cmp; b.lt`.
 
 Division by a constant is also selected specially in the JIT: for 2^k it
-emits the shift sequence gcc uses for `x / 8` (add `2^k - 1` to negative
+emits the shift sequence clang uses for `x / 8` (add `2^k - 1` to negative
 dividends, then shift arithmetic right), which rounds toward zero like
-`idiv` but costs four single-cycle instructions instead of 20 to 40 cycles.
-On `bench/loop.tiny` (Collatz, full of `n % 2` and `n / 2`) that took the JIT
-from 350 ms to 205 ms; copy coalescing (below) then brought it to 142 ms.
+`sdiv` but uses four single-cycle instructions instead of a divide.
+`bench/loop.tiny` (Collatz, full of `n % 2` and `n / 2`) is the benchmark
+where this shows.
 
 Everything else is one MIR op per SSA op.
 
@@ -107,10 +109,10 @@ when compilation happens while the program waits.
 
 Two extra rules for the JIT, both about calls:
 
-- **Caller- vs callee-saved.** Under the System V ABI a call may destroy rax,
-  rcx, rdx, rsi, rdi, r8-r11, and must preserve rbx, rbp, r12-r15. An interval
+- **Caller- vs callee-saved.** Under the arm64 calling convention a call
+  may destroy x0-x17, and must preserve x19-x28 (and fp, lr, sp). An interval
   that is live across a call (starts before it and ends after it) may only
-  get rbx or r12-r15. Other intervals prefer rsi, rdi, r8, r9, so short-lived
+  get x19-x28. Other intervals prefer x1-x8 and x13-x15, so short-lived
   values do not force the prologue to save anything.
 - **Hints.** A value about to be passed as argument i would like to already
   be in the i-th argument register; a move's destination would like its
@@ -123,46 +125,82 @@ pinned to r0..rN (the calling convention puts arguments there).
 
 ## The JIT
 
-`src/jit.cpp` and the encoder in `src/x86.h`.
+`src/jit.cpp` and the encoder in `src/a64.h`.
 
-**Encoding.** x86-64 instructions are `[REX] opcode ModRM [disp] [imm]`. REX's
-W bit selects 64-bit operands and its R and B bits supply the fourth bit of
-register numbers (that is how r8-r15 exist). ModRM picks register-register
-(mod=11) or `[base + disp32]` (mod=10). The assembler knows about 40
-instruction forms, which is all this needs.
+**Encoding.** Every ARM64 instruction is exactly 32 bits, so the encoder is a
+list of bit patterns: `add x1, x2, x3` is `0x8B000000 | x3 << 16 | x2 << 5 |
+x1`. The awkward part is immediates. `add` takes a 12-bit unsigned constant,
+logical operations take "bitmask immediates" (a repeating pattern of ones,
+which is how `tst x0, #1` fits), and an arbitrary 64-bit constant takes up to
+four instructions: `movz` for one 16-bit chunk, then `movk` to fill in the
+others (`movn` when the value is mostly ones, like small negatives). Register
+number 31 means the zero register in most instructions and the stack pointer
+in a few, which is why `mov x29, sp` is really `add x29, sp, #0`.
 
-**Frame.** `push rbp; mov rbp, rsp; sub rsp, N` where N covers the saved
-callee-saved registers and spill slots and is a multiple of 16. Since the
-return address plus the pushed rbp are 16 bytes, rsp stays 16-byte aligned
-for the whole body, which the ABI requires at every call, so calls need no
-fixups.
+**Registers.** 31 general registers is a lot next to x86-64's 16. The JIT
+keeps x9-x12, x16 and x17 as scratch for instruction selection, never touches
+x18 (reserved by Apple for the OS), and allocates the other 22.
+
+**Frame.** `stp x29, x30, [sp, #-16]!; mov x29, sp; sub sp, sp, #N`: save
+the frame pointer and the link register (the return address, which arm64
+keeps in a register rather than on the stack), point x29 at the pair, and
+reserve N bytes for saved callee-saved registers and spill slots. N is a
+multiple of 16 because arm64 faults on a misaligned sp.
 
 **Instruction selection per op.** Values are tagged (`docs/03-runtime.md`),
 which makes most arithmetic cheap: tagged `a + b` is a plain `add`, so an add
 of two unknown values is
 
 ```
-mov rdx, a ; or rdx, b ; test rdx, 1 ; jne type_error   ; guard both at once
-mov dst, a ; add dst, b                                   ; x86 is two-address
+orr  x12, a, b ; tst x12, #1 ; b.ne type_error    ; guard both at once
+add  dst, a, b                                    ; three-address: no copies
 ```
 
 and when the optimizer proved both operands are ints the guard is gone.
-Comparisons become `cmp` + `jcc` when fused into a branch, or `setcc` + `movzx`
-+ `shl` (to tag the 0/1) when their value is needed. Error paths jump to one
-out-of-line stub per function that calls `rt_error`.
+Comparisons become `cmp` + `b.cond` when fused into a branch, or `cset` +
+`lsl` (to tag the 0/1) when their value is needed. Error paths jump to one
+out-of-line stub per function.
 
-**Calls.** Arguments go in rdi, rsi, rdx, rcx, r8, r9 (the JIT refuses
-functions with more than six parameters; they stay interpreted). Getting the
-arguments from wherever the allocator put them into those registers is a
-parallel move, the same problem as phi copies: `f(b, a)` with a in rdi and b
-in rsi is a swap. `parallel_move` orders the moves and breaks cycles through
-rax. The same routine moves incoming parameters to their allocated homes in
-the prologue.
+**Calls.** Arguments go in x0-x7 (the JIT refuses functions with more than
+eight parameters; they stay interpreted), the result comes back in x0, and
+`bl` puts the return address in x30. Getting the arguments from wherever the
+allocator put them into x0-x7 is a parallel move, the same problem as phi
+copies: `f(b, a)` with a in x0 and b in x1 is a swap. `parallel_move` orders
+the moves and breaks cycles through x16. The same routine moves incoming
+parameters to their allocated homes in the prologue.
 
-**Memory and W^X.** Code goes into one 64 MB `mmap` region, so every call
-between compiled functions fits in a 32-bit relative displacement. Pages are
-writable while code is copied in and are then `mprotect`ed to read+execute:
-never writable and executable at once. Functions are packed back to back.
+Calls between compiled functions are a single `bl`, which reaches +-128 MB;
+all JIT code lives in one 64 MB region so that always works. Calls into the C
+runtime (`rt_print`, `rt_error`) cannot assume that, since the runtime lives
+in the tinyjit binary somewhere else in the address space. They go to a small
+trampoline at the end of the function that loads the full address and jumps:
+
+```
+bl   tramp          ; in the body
+...
+tramp:
+ldr  x16, #8        ; x16 = the 8 bytes right after the next instruction
+br   x16
+.quad rt_print
+```
+
+Linkers do the same thing for far calls (they call them veneers or branch
+islands), and it is why x16 and x17 are reserved as "intra-procedure-call"
+scratch registers in the calling convention.
+
+**Memory, W^X, and the instruction cache.** macOS on Apple Silicon does not
+allow a page to be writable and executable at the same time. A JIT maps its
+region with `MAP_JIT`, and each thread flips its own view of that region with
+`pthread_jit_write_protect_np(0)` (writable) and `(1)` (executable). The
+flip is per thread and costs almost nothing, unlike an `mprotect` system
+call. After writing, the JIT calls `sys_icache_invalidate`: ARM keeps the
+instruction cache separate from data writes, so without that the CPU can run
+whatever stale bytes it had cached for those addresses. On Linux (used to
+fuzz under emulation) the same steps are `mprotect` and
+`__builtin___clear_cache`.
+
+Functions are packed back to back, 16-byte aligned, so a hot loop's functions
+share cache lines and pages.
 
 **What gets compiled.** In tiered mode (default) a function is compiled
 after 100 calls, together with everything it can call, so compiled code
@@ -174,60 +212,45 @@ site, of which registers and slots hold pointers). There is no on-stack
 replacement either, so a hot loop in a function that is only called once
 (like `main`) only gets compiled with `--jit=eager`.
 
-## Inlining and the instruction cache
+## Inlining and code size
 
 `bench/gen_inline.py` generates 16 small leaf functions, 48 mid functions
 that each call 8 leaves, and a main loop that picks a mid pseudo-randomly each
-iteration through a tree of ifs (think `switch` or a virtual call). Numbers
-from `bench/bench.py` (instruction and cache counts simulated by cachegrind,
-counting only the program run):
+iteration through a tree of ifs (think `switch` or a virtual call). On an M5,
+best of 5:
 
-| inline threshold | calls inlined | code bytes | instructions | L1i misses | run time |
-|---:|---:|---:|---:|---:|---:|
-| 0 | 0 | 24,611 | 31,159,031 | 504 | 10.4 ms |
-| 30 | 384 | 92,714 | 25,999,031 | 1,136,529 | 10.8 ms |
-| 400 | 432 | 173,467 | 25,099,030 | 1,038,723 | 10.7 ms |
+| inline threshold | calls inlined | code bytes | run time | compile time |
+|---:|---:|---:|---:|---:|
+| 0 | 0 | 18,952 | 4.62 ms | 2.3 ms |
+| 30 | 384 | 66,220 | 4.47 ms | 14.8 ms |
+| 400 | 432 | 122,464 | 4.40 ms | 54.7 ms |
 
-(Measured in a Linux VM; `make bench` regenerates this for your machine in
-`build/bench_results.md`.)
-
-Inlining did what it promises: 17% fewer instructions, because the call,
-the prologue and epilogue, and the argument shuffling are gone, and the
-inlined copies are re-optimized in context. But the reachable code grew
-from 25 KB, which fits in a 32 KB L1 instruction cache, to 90-170 KB, which
-does not, and because each iteration jumps to a different copy, misses went
-from almost none to about 19 per iteration. Run time went up 3% while the
-instruction count went down 17%.
+Inlining wins here. The call, the prologue and epilogue and the argument
+shuffling are gone, and the inlined copies are re-optimized in context. The
+code grew 6x, to 120 KB, but that still fits in the L1 instruction cache of
+Apple's performance cores (192 KB on the M1 through M4, several times the
+32 KB typical of x86 cores).
 
 Scale the generator up (`M=512 ITERS=200000 python3 bench/gen_inline.py`, 512
-mids) and the effect is clearer:
+mids) and it flips:
 
-| inline threshold | code bytes | instructions | L1i misses | run time | compile time |
-|---:|---:|---:|---:|---:|---:|
-| 0 | 222,752 | 106,284,838 | 1,657,355 | 40.8 ms | 109 ms |
-| 400 | 1,076,548 | 88,639,293 | 6,326,063 | 44.7 ms | 947 ms |
+| inline threshold | calls inlined | code bytes | run time | compile time |
+|---:|---:|---:|---:|---:|
+| 0 | 0 | 169,300 | 16.84 ms | 47.5 ms |
+| 30 | 4,096 | 672,988 | 17.77 ms | 185.9 ms |
+| 400 | 4,172 | 762,132 | 17.40 ms | 304.4 ms |
 
-17% fewer instructions, 10% slower, and 9x the compile time, which in a JIT
-is paid while the program waits. An L1i miss that hits L2 only costs about a
-dozen cycles, and the CPU front end hides some of that, which is why the
-wall-time effect is smaller than the miss counts suggest. This is why real
-inliners have budgets: HotSpot caps callee bytecode size (`MaxInlineSize`,
-`FreqInlineSize`) and total inlined size per compilation, and weighs call
-site frequency, so only hot, small callees get copied.
+Now the inlined code is several times the L1 instruction cache, and each
+iteration jumps to a different copy of the same leaf code, so the front end
+keeps refetching from L2. The non-inlined version executes more instructions
+but keeps reusing the same 170 KB. Inlining is 3-6% slower here and costs 4
+to 6 times the compile time, which in a JIT is paid while the program waits.
 
-### A cache effect found by accident
+This is why real inliners have budgets: HotSpot caps callee bytecode size
+(`MaxInlineSize`, `FreqInlineSize`) and total inlined size per compilation,
+and weighs call-site frequency, so only hot, small callees get copied. The
+right threshold also depends on the machine: the crossover on a core with a
+32 KB instruction cache comes much earlier than on an M-series core.
 
-The first version put each compiled unit on its own 4 KB page. With inlining
-off, 29 KB of code produced **1,975,895** L1i misses on this benchmark.
-Packing the same code contiguously gave **574**. Nothing about the code
-changed, only where it lived. (These two numbers are from before copy
-coalescing shrank the code, hence 29 KB rather than 25 KB.)
-
-The cause is cache associativity. A 32 KB, 8-way L1 has 64 sets; the set is
-picked by address bits 6-11. Every page-aligned function starts at an address
-with those bits equal to zero, so all 65 function entry points (and the
-first cache lines after them, which are the hottest) compete for the same
-few sets, 8 ways each. The cache was nearly empty and still thrashing. This
-is one reason linkers and JITs align functions to 16 or 32 bytes, not to
-pages, and why profile-guided layout (BOLT, `-freorder-functions`) groups
-hot functions together.
+To count instruction cache misses yourself on a Mac, Instruments' CPU
+Counters template can sample the L1I miss events while the benchmark runs.

@@ -21,7 +21,9 @@ import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-BIN = os.path.join(ROOT, "build", "tinyjit")
+# TINYJIT overrides the command, e.g. TINYJIT="qemu-aarch64 build-arm64/tinyjit"
+# to test the arm64 JIT under emulation on another machine.
+BIN = os.environ.get("TINYJIT", os.path.join(ROOT, "build", "tinyjit")).split()
 
 REFERENCE = ["-O0", "--jit=off", "--dispatch=switch"]
 CONFIGS = [
@@ -155,7 +157,7 @@ class Gen:
 
 def run(cfg, path):
     try:
-        p = subprocess.run([BIN, *cfg, path], capture_output=True, text=True, timeout=20)
+        p = subprocess.run([*BIN, *cfg, path], capture_output=True, text=True, timeout=20)
     except subprocess.TimeoutExpired:
         return ("timeout", -1)
     err = p.stderr.strip().splitlines()

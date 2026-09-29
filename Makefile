@@ -1,35 +1,29 @@
-CXX      ?= g++
-CXXFLAGS ?= -O2 -g -std=c++20 -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers -Wno-implicit-fallthrough
+# tinyjit targets Apple Silicon Macs. `make` needs only the Xcode command
+# line tools (xcode-select --install).
+CXX      ?= c++
 CC       ?= cc
+CXXFLAGS ?= -O2 -g -std=c++20 -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers -Wno-implicit-fallthrough
+BUILD    ?= build
 
 SRC  := $(wildcard src/*.cpp)
-OBJ  := $(SRC:src/%.cpp=build/%.o)
+OBJ  := $(SRC:src/%.cpp=$(BUILD)/%.o)
 HDRS := $(wildcard src/*.h) src/interp.inc
 
 .PHONY: all clean test fuzz bench asm aot
 
-UNAME_S := $(shell uname -s)
-UNAME_M := $(shell uname -m)
+all: $(BUILD)/tinyjit $(BUILD)/machodump
 
-# The JIT and the ELF tools are x86-64 Linux only. On macOS (or arm64 Linux)
-# everything else builds and runs, with every function interpreted.
-ifeq ($(UNAME_S)-$(UNAME_M),Linux-x86_64)
-all: build/tinyjit build/elfdump
-else
-all: build/tinyjit
-endif
+$(BUILD)/tinyjit: $(OBJ)
+	$(CXX) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
 
-build/tinyjit: $(OBJ)
-	$(CXX) $(CXXFLAGS) -o $@ $^
-
-build/%.o: src/%.cpp $(HDRS) | build
+$(BUILD)/%.o: src/%.cpp $(HDRS) | $(BUILD)
 	$(CXX) $(CXXFLAGS) -c -o $@ $<
 
-build/elfdump: tools/elfdump.cpp | build
-	$(CXX) $(CXXFLAGS) -o $@ $<
+$(BUILD)/machodump: tools/machodump.cpp | $(BUILD)
+	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS)
 
-build:
-	mkdir -p build
+$(BUILD):
+	mkdir -p $(BUILD)
 
 test: all
 	python3 tests/run_tests.py
@@ -38,16 +32,16 @@ fuzz: all
 	python3 tools/fuzz.py --count 300
 
 bench: all
-	bash bench/run.sh
+	python3 bench/bench.py
 
 asm: all
 	bash tools/compare_asm.sh
 
-# Ahead-of-time: compile bench/fib.tiny to an ELF object and link it.
+# Ahead-of-time: compile bench/fib.tiny to a Mach-O object and link it.
 aot: all
-	build/tinyjit --emit-elf=build/fib_aot.o bench/fib.tiny
-	$(CC) -no-pie aot/runtime.c build/fib_aot.o -o build/fib_aot
-	build/fib_aot
+	$(BUILD)/tinyjit --emit-obj=$(BUILD)/fib_aot.o bench/fib.tiny
+	$(CC) aot/runtime.c $(BUILD)/fib_aot.o -o $(BUILD)/fib_aot
+	$(BUILD)/fib_aot
 
 clean:
-	rm -rf build
+	rm -rf $(BUILD)

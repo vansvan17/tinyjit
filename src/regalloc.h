@@ -8,9 +8,9 @@
 //
 // The same code serves both backends:
 //   VM:  ~250 virtual registers, never spills, params pinned to r0..rN.
-//   JIT: 9 x86-64 registers. Intervals that live across a call may only use
-//        callee-saved registers (rbx, r12-r15); the rest prefer the
-//        caller-saved ones (rsi, rdi, r8, r9) so the prologue saves less.
+//   JIT: 22 arm64 registers. Intervals that live across a call may only use
+//        callee-saved registers (x19-x28); the rest prefer the caller-saved
+//        ones (x0-x8, x13-x15) so the prologue saves less.
 #pragma once
 #include <string>
 #include <vector>

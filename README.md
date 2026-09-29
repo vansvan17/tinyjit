@@ -1,10 +1,11 @@
 # tinyjit
 
-A small language with a real compiler pipeline: a Pratt parser, SSA
-construction, optimization passes, a register-based bytecode VM with a
-mark-sweep garbage collector, and an x86-64 JIT with linear scan register
-allocation that follows the System V ABI and can write its output as an ELF
-object you can link. About 4,300 lines of C++, no dependencies.
+A small language with a real compiler pipeline, built for Apple Silicon: a
+Pratt parser, SSA construction, optimization passes, a register-based bytecode
+VM with a mark-sweep garbage collector, and an ARM64 JIT with linear scan
+register allocation that follows the Apple arm64 calling convention and can
+write its output as a Mach-O object you link with `cc`. About 4,600 lines of
+C++, no dependencies.
 
 ```
 fn fib(n) {
@@ -15,38 +16,31 @@ fn main() { print(fib(32)); }
 ```
 
 ```
-$ build/tinyjit --stats bench/fib.tiny
+$ build/tinyjit --stats --jit=eager bench/fib.tiny
 2178309
-[stats] run time        13.84 ms
-[stats] jit             2 functions, 305 bytes of code, 0 spills
+[stats] run time        13.01 ms
+[stats] jit             2 functions, 260 bytes of code, 0 spills
 ```
 
-Same program, same machine: 77 ms in the interpreter, 14 ms JIT-compiled,
-20 ms for gcc `-O0`, 5.4 ms for gcc `-O2`.
+Benchmarks against the interpreter and against C are under Results.
 
 ## Build and run
 
-Linux x86-64, g++ 11+ or clang 14+, Python 3 for the tests.
+An Apple Silicon Mac with the Xcode command line tools
+(`xcode-select --install`), and Python 3 for the tests.
 
 ```
-make                 # build/tinyjit and build/elfdump
+make                 # build/tinyjit and build/machodump
 make test            # 14 programs x 10 configurations, plus an AOT link test
 make fuzz            # 300 random programs, every backend must agree
-make bench           # tables below (uses perf if it works, else cachegrind)
-make asm             # the JIT's fib next to gcc -O0 and -O2
-make aot             # compile fib to an ELF object, link with cc, run it
+make bench           # the tables below, for your machine
+make asm             # the JIT's fib next to clang -O0 and -O2
+make aot             # compile fib to a Mach-O object, link with cc, run it
 ```
 
-On macOS, `make` and `make test` work natively (Xcode command line tools are
-enough). Everything runs except the JIT and the ELF tools, which emit x86-64
-Linux code: `--jit` falls back to the interpreter and `--emit-elf` reports
-that it is unavailable. For the full thing, including the JIT, cachegrind and
-the AOT link, use the Dockerfile. On Apple Silicon Docker emulates x86-64, so
-the JIT works but timings are not representative:
-
-```
-docker build --platform linux/amd64 -t tinyjit . && docker run --rm -it --platform linux/amd64 tinyjit
-```
+Elsewhere, everything but the JIT still builds: `--jit` falls back to the
+interpreter. The JIT also runs on arm64 Linux, which is how it is fuzzed
+under emulation (`TINYJIT="qemu-aarch64 build/tinyjit" make test`).
 
 ## The pipeline
 
@@ -70,12 +64,13 @@ optimized SSA                                     --dump-opt
   ▼
 MIR (machine-level, virtual registers)            --dump-mir
   │                                  │
-  │ linear scan, 250 VM registers    │ linear scan, 9 x86 registers, spilling
+  │ linear scan, 250 VM registers    │ linear scan, 22 arm64 registers, spilling
   ▼                                  ▼
-bytecode                             x86-64 machine code  src/jit.cpp, src/x86.h
-  │  register VM                     │  mmap, W^X, SysV calls
-  │  switch or computed goto         │  --emit-elf: ELF .o with symbols
-  │  mark-sweep GC                   │  and relocations
+bytecode                             ARM64 machine code   src/jit.cpp, src/a64.h
+  │  register VM                     │  MAP_JIT, per-thread W^X, icache flush
+  │  switch or computed goto         │  Apple arm64 calling convention
+  │  mark-sweep GC                   │  --emit-obj: Mach-O .o with symbols
+  │                                  │  and relocations
   ▼                                  ▼
   interpreter ── hot function (100 calls) ──► native code
 ```
@@ -122,19 +117,19 @@ that flow into it, so there are no copies left:
     jmp -> B1
 ```
 
-x86-64 (`--emit-elf`, then `objdump -d -M intel`): `n` arrives in rdi and
-stays there, `i` and `s` get r8 and rsi. Constants are doubled because ints
-are tagged (`n << 1`). The one type guard left is on `n`, the only value not
-proven to be an int:
+ARM64 (`--emit-obj`, then `objdump -d`): `n` arrives in x0 and stays there,
+`s` and `i` get x1 and x2. Constants are doubled because ints are tagged
+(`n << 1`). The one type guard left is on `n`, the only value not proven to
+be an int:
 
 ```
-  12:  test   rdi,0x1          ; is n an int?
-  19:  jne    3f               ;   no: type error
-  1f:  cmp    r8,rdi           ; i <= n ?
-  22:  jg     37
-  28:  add    rsi,r8           ; s = s + i
-  2b:  add    r8,0x2           ; i = i + 1   (1 is stored as 2)
-  32:  jmp    12
+  10:  tst   x0, #0x1          ; is n an int?
+  14:  b.ne  0x3c              ;   no: type error
+  18:  cmp   x2, x0            ; i <= n ?
+  1c:  b.gt  0x2c
+  20:  add   x1, x1, x2        ; s = s + i
+  24:  add   x2, x2, #0x2      ; i = i + 1   (1 is stored as 2)
+  28:  b     0x10
 ```
 
 ## The language
@@ -155,44 +150,40 @@ Only `0` is false. `/` and `%` truncate toward zero, like C.
 
 ## Results
 
-Measured in a Linux VM without hardware performance counters, so cache and
-branch figures are cachegrind simulations counting only the program run, not
-the compiler. Times are best of 5. `make bench` regenerates everything on
-your machine (with `perf stat` if it works there).
-
-**Execution modes** (run time, ms):
+Measured on an M5 MacBook Air (in an arm64 Linux VM, where the JIT emits the
+same code as on macOS), best of 5 runs, program run time only. `make bench`
+regenerates these tables on your machine.
 
 | program | switch interp | goto interp | JIT tiered | JIT eager |
 |---|---:|---:|---:|---:|
-| fib.tiny: 7M calls | 83.1 | 77.0 | 13.8 | 15.6 |
-| loop.tiny: Collatz to 300k | 490.7 | 423.8 | 426.1 | 142.0 |
-| sieve.tiny: allocation heavy | 54.3 | 53.1 | 51.1 | 51.1 |
+| fib.tiny: 7M calls | 39.1 ms | 27.1 ms | 5.9 ms | 5.8 ms |
+| loop.tiny: Collatz to 300k | 295.0 ms | 204.8 ms | 203.6 ms | 73.4 ms |
+| sieve.tiny: allocation heavy | 24.7 ms | 22.1 ms | 22.2 ms | 23.4 ms |
 
 loop.tiny's hot loop gets inlined into `main`, which is only called once;
 tiered mode counts calls and has no on-stack replacement, so only eager mode
 compiles it. sieve.tiny allocates in its hot functions, which the JIT
 declines (it has no stack maps for the GC), so it stays interpreted.
 
-**Dispatch.** Computed goto vs `switch`, cachegrind branch simulation on
-fib.tiny: 7.9M vs 42.3M mispredicted branches, 11% fewer instructions.
-[docs/03-runtime.md](docs/03-runtime.md) explains why, and why modern CPUs
-shrink the gap.
+**Dispatch.** Computed goto is 30% faster than `switch` on fib and loop.
+[docs/03-runtime.md](docs/03-runtime.md) explains why.
 
-**Inlining vs the instruction cache.** On a generated program with many
-call sites dispatched pseudo-randomly:
+**Inlining vs code size.** On a generated program with many call sites
+dispatched pseudo-randomly, inlining wins while the code fits the M5's large
+L1 instruction cache, and loses once it does not:
 
-| inline threshold | code bytes | instructions | L1i misses | run time |
-|---:|---:|---:|---:|---:|
-| 0 | 24,611 | 31,159,031 | 504 | 10.4 ms |
-| 30 | 92,714 | 25,999,031 | 1,136,529 | 10.8 ms |
+| program | inline threshold | code bytes | run time | compile time |
+|---|---:|---:|---:|---:|
+| 48 mid functions | 0 | 18,952 | 4.62 ms | 2.3 ms |
+| | 400 | 122,464 | 4.40 ms | 54.7 ms |
+| 512 mid functions | 0 | 169,300 | 16.84 ms | 47.5 ms |
+| | 400 | 762,132 | 17.40 ms | 304.4 ms |
 
-17% fewer instructions, 3% slower. Scaled up to a megabyte of inlined code
-it is 17% fewer instructions and 10% slower, with 9x the compile time.
 Details and the reasoning in [docs/02-backend.md](docs/02-backend.md).
 
 **GC pauses** grow with the heap, as they must for stop-the-world
-mark-sweep: 0.01 ms at 2K cells, 4 ms at 512K cells. How Go and Rust avoid
-this, and what it costs them instead, is in
+mark-sweep: 0.01 ms at 2K cells, about 1 ms at 512K cells. How Go and Rust
+avoid this, and what it costs them instead, is in
 [docs/03-runtime.md](docs/03-runtime.md).
 
 ## How it is tested
@@ -217,12 +208,15 @@ Bugs found along the way, each worth knowing about:
    programs). In `f(a, b)`, the phi returned for `a` could be deleted as
    trivial while `b` was being evaluated, leaving a dangling pointer in a C++
    local. See [docs/01-frontend.md](docs/01-frontend.md).
-2. **Page-aligned code thrashing the icache.** Putting each compiled unit on
-   its own page made 29 KB of code miss the L1i 2 million times; packing it
-   gave 574 misses. Cache set aliasing, explained in
-   [docs/02-backend.md](docs/02-backend.md).
+2. **Unspecified argument order.** `write_var(var, cur, expr(e))` reads
+   `cur` (the current block) and evaluates `expr(e)`, which can move `cur`
+   when `e` contains `&&` or `||`. C++ does not say which argument is
+   evaluated first. The x86-64 build happened to do it right; the first
+   arm64 build wrote the variable into the wrong block and printed wrong
+   answers in about 1 in 11 fuzzed programs, in every mode, interpreter
+   included.
 3. **Writing into an executable page.** Padding between packed code units
-   was written into a page that had already been flipped to read+execute.
+   was written into a page that had already been flipped to executable.
    Only showed up once code crossed a page boundary at the wrong offset, in
    a 500-function benchmark.
 4. **`continue` inside `do { } while (0)`.** The `switch` interpreter's
@@ -235,11 +229,12 @@ Bugs found along the way, each worth knowing about:
 1. [docs/01-frontend.md](docs/01-frontend.md): Pratt parsing, SSA and the
    Braun algorithm, dominators, the passes.
 2. [docs/02-backend.md](docs/02-backend.md): instruction selection, out of
-   SSA, coalescing, linear scan, the JIT, inlining and the icache.
+   SSA, coalescing, linear scan, the ARM64 JIT, inlining and code size.
 3. [docs/03-runtime.md](docs/03-runtime.md): tagged values, the register VM,
    dispatch, the GC, Go vs Rust.
-4. [docs/04-binary.md](docs/04-binary.md): objdump, ELF, relocations, the
-   SysV calling convention, linking JIT output as an AOT compiler.
+4. [docs/04-binary.md](docs/04-binary.md): objdump and otool, Mach-O,
+   relocations, the Apple arm64 calling convention, linking JIT output as an
+   AOT compiler.
 
 ## Layout
 
@@ -254,22 +249,22 @@ src/
   regalloc.cpp      liveness, coalescing, linear scan (shared by both backends)
   vm.h vm.cpp interp.inc bytecode.cpp   register VM, two dispatch loops
   gc.h gc.cpp       mark-sweep collector
-  x86.h jit.cpp     x86-64 encoder, JIT, ELF writer
+  a64.h jit.cpp     ARM64 encoder, JIT, Mach-O writer
   runtime.cpp       print, errors (called from JIT code too)
   main.cpp          driver and flags (build/tinyjit --help)
-tools/  elfdump.cpp  fuzz.py  compare_asm.sh
+tools/  machodump.cpp  fuzz.py  compare_asm.sh
 bench/  fib, loop, sieve, gc_live, gen_inline.py, bench.py, c/fib.c
 tests/  cases/*.tiny  run_tests.py
-aot/    runtime.c   for linking --emit-elf output
+aot/    runtime.c   for linking --emit-obj output
 ```
 
 ## Limitations
 
-- The JIT is x86-64 Linux only (elsewhere everything is interpreted). An arm64 backend would need its own encoder and
-  calling convention; the MIR and register allocator would carry over.
+- The JIT targets arm64 only; on other machines everything is interpreted.
 - The JIT does not compile functions that allocate (no GC stack maps), with
-  more than six parameters (no stack-passed arguments), and there is no
-  on-stack replacement.
+  more than eight parameters (no stack-passed arguments), or bigger than
+  about 1 MB (conditional branches reach +-1 MB), and there is no on-stack
+  replacement.
 - Intervals are single conservative ranges with whole-interval spilling.
   Second-chance binpacking or interval splitting (Wimmer and Mössenböck)
   would allocate loops with high register pressure better.

@@ -13,12 +13,6 @@
 #include "passes.h"
 #include "regalloc.h"
 #include "vm.h"
-#if __has_include(<valgrind/cachegrind.h>)
-#include <valgrind/cachegrind.h>
-#else
-#define CACHEGRIND_START_INSTRUMENTATION
-#define CACHEGRIND_STOP_INSTRUMENTATION
-#endif
 
 static void usage() {
   fprintf(stderr,
@@ -41,9 +35,9 @@ static void usage() {
           "  --dump-mir            print MIR (after isel and out-of-SSA) and exit\n"
           "  --dump-bc             print bytecode and exit\n"
           "  --dump-regalloc       print JIT live intervals on stderr while compiling\n"
-          "  --dump-jit=FILE       after running, write raw JIT code (objdump -b binary)\n"
-          "  --emit-elf=FILE       compile every function with the JIT backend into an\n"
-          "                        ELF .o and exit (link with aot/runtime.c)\n");
+          "  --dump-jit=FILE       after running, write the raw JIT code region to FILE\n"
+          "  --emit-obj=FILE       compile every function with the JIT backend into a\n"
+          "                        Mach-O .o and exit (link with aot/runtime.c)\n");
   exit(2);
 }
 
@@ -55,7 +49,7 @@ int main(int argc, char** argv) {
   uint64_t jit_threshold = 100;
   bool gc_stress = false, gc_log = false, stats = false;
   bool dump_ast = false, dump_ir = false, dump_opt = false, dump_mir = false, dump_bc = false, dump_ra = false;
-  std::string dump_jit, emit_elf, path;
+  std::string dump_jit, emit_obj, path;
 
   for (int i = 1; i < argc; i++) {
     std::string a = argv[i];
@@ -80,7 +74,7 @@ int main(int argc, char** argv) {
     else if (a == "--dump-bc") dump_bc = true;
     else if (a == "--dump-regalloc") dump_ra = true;
     else if (auto v = val("--dump-jit=")) dump_jit = v;
-    else if (auto v = val("--emit-elf=")) emit_elf = v;
+    else if (auto v = val("--emit-obj=")) emit_obj = v;
     else if (a[0] == '-') usage();
     else path = a;
   }
@@ -146,11 +140,11 @@ int main(int argc, char** argv) {
   if (!jit_supported() && jit_mode != "off" && stats)
     fprintf(stderr, "[stats] note            JIT not available on this platform, running interpreted\n");
   jit.print_intervals = dump_ra;
-  if (!emit_elf.empty()) {
+  if (!emit_obj.empty()) {
     jit.compile_all();
     std::string err;
-    if (!jit.write_elf(emit_elf, err)) { fprintf(stderr, "error: %s\n", err.c_str()); return 2; }
-    fprintf(stderr, "wrote %s: %d functions, %zu bytes of code\n", emit_elf.c_str(), jit.functions_compiled,
+    if (!jit.write_object(emit_obj, err)) { fprintf(stderr, "error: %s\n", err.c_str()); return 2; }
+    fprintf(stderr, "wrote %s: %d functions, %zu bytes of code\n", emit_obj.c_str(), jit.functions_compiled,
             jit.code_bytes());
     for (auto& f : vm.funcs)
       if (f.jit_state == 2) fprintf(stderr, "  skipped %s (allocates or calls something that does)\n", f.name.c_str());
@@ -164,12 +158,8 @@ int main(int argc, char** argv) {
   double front_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - tc0).count();
 
   setvbuf(stdout, nullptr, _IOFBF, 1 << 16);
-  // Under `valgrind --tool=cachegrind --instr-at-start=no` only the program
-  // run is measured, not parsing, optimization or eager compilation.
   auto t0 = std::chrono::steady_clock::now();
-  CACHEGRIND_START_INSTRUMENTATION;
   vm.run(mod.index["main"]);
-  CACHEGRIND_STOP_INSTRUMENTATION;
   auto t1 = std::chrono::steady_clock::now();
   fflush(stdout);
 

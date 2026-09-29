@@ -25,7 +25,9 @@ Value VM::call_native(VMFunc* f, Value* a) {
     case 3: return ((V(*)(V, V, V))p)(a[0], a[1], a[2]);
     case 4: return ((V(*)(V, V, V, V))p)(a[0], a[1], a[2], a[3]);
     case 5: return ((V(*)(V, V, V, V, V))p)(a[0], a[1], a[2], a[3], a[4]);
-    default: return ((V(*)(V, V, V, V, V, V))p)(a[0], a[1], a[2], a[3], a[4], a[5]);
+    case 6: return ((V(*)(V, V, V, V, V, V))p)(a[0], a[1], a[2], a[3], a[4], a[5]);
+    case 7: return ((V(*)(V, V, V, V, V, V, V))p)(a[0], a[1], a[2], a[3], a[4], a[5], a[6]);
+    default: return ((V(*)(V, V, V, V, V, V, V, V))p)(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]);
   }
 }
 

@@ -14,7 +14,9 @@ import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-BIN = os.path.join(ROOT, "build", "tinyjit")
+# TINYJIT overrides the command, e.g. TINYJIT="qemu-aarch64 build-arm64/tinyjit"
+# to test the arm64 JIT under emulation on another machine.
+BIN = os.environ.get("TINYJIT", os.path.join(ROOT, "build", "tinyjit")).split()
 
 CONFIGS = [
     ["-O0", "--jit=off", "--dispatch=switch"],
@@ -43,25 +45,22 @@ def parse_expectations(src):
 
 
 def check_aot():
-    """Compile a program to an ELF object, link it with aot/runtime.c, run it."""
+    """Compile a program to a Mach-O object, link it with aot/runtime.c, run it."""
     import platform
     import shutil
-    if platform.system() != "Linux" or platform.machine() != "x86_64":
-        print("aot: skipped (needs x86-64 Linux)")
+    if platform.system() != "Darwin" or platform.machine() != "arm64":
+        print("aot: skipped (needs an Apple Silicon Mac)")
         return 0
-    cc = shutil.which("cc") or shutil.which("gcc")
-    if not cc:
-        print("aot: skipped (no C compiler)")
-        return 0
+    cc = shutil.which("cc")
     src = os.path.join(ROOT, "tests", "cases", "phis.tiny")
     obj = os.path.join(ROOT, "build", "aot_test.o")
     exe = os.path.join(ROOT, "build", "aot_test")
-    subprocess.run([BIN, f"--emit-elf={obj}", src], check=True, capture_output=True)
-    subprocess.run([cc, "-no-pie", os.path.join(ROOT, "aot", "runtime.c"), obj, "-o", exe], check=True)
+    subprocess.run([*BIN, f"--emit-obj={obj}", src], check=True, capture_output=True)
+    subprocess.run([cc, os.path.join(ROOT, "aot", "runtime.c"), obj, "-o", exe], check=True)
     got = subprocess.run([exe], capture_output=True, text=True).stdout.splitlines()
     want, _ = parse_expectations(open(src).read())
     ok = got == want
-    print(f"aot: {'passed' if ok else 'FAILED'} (phis.tiny compiled to ELF, linked with cc, run natively)")
+    print(f"aot: {'passed' if ok else 'FAILED'} (phis.tiny compiled to Mach-O, linked with cc, run natively)")
     return 0 if ok else 1
 
 
@@ -75,7 +74,7 @@ def main():
         want_out, want_err = parse_expectations(open(f).read())
         for cfg in CONFIGS:
             runs += 1
-            p = subprocess.run([BIN, *cfg, f], capture_output=True, text=True, timeout=120)
+            p = subprocess.run([*BIN, *cfg, f], capture_output=True, text=True, timeout=120)
             got = p.stdout.splitlines()
             ok = got == want_out
             if want_err is None:

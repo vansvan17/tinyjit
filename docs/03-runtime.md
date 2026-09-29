@@ -59,18 +59,21 @@ not the C stack, so deep recursion in tiny code does not overflow C's stack.
   opcode, and "what comes after a compare-and-branch" is much more
   predictable than "what comes next, anywhere".
 
-Measured with cachegrind's branch simulator on `bench/fib.tiny`: 42.3M
-mispredicted branches with `switch`, 7.9M with computed goto, and about 11%
-fewer instructions (the `switch` version also does a bounds check and jumps
-back to the loop head). In wall time the goto build is 7-15% faster here.
+On an M5, computed goto runs `bench/fib.tiny` in 27.1 ms against 39.1 ms for
+`switch`, and `bench/loop.tiny` in 205 ms against 295 ms: about 30% faster on
+both. Two things contribute. Each dispatch is fewer instructions (the
+`switch` version also bounds-checks the opcode and jumps back to a shared
+loop head), and each opcode gets its own indirect branch for the predictor
+to learn.
 
-cachegrind's predictor is a simple model. Real predictors (TAGE-style, using
-global branch history) have narrowed this gap a lot since the classic paper
-(Ertl and Gregg, "The Structure and Performance of Efficient Interpreters",
-2003); Rohou, Swamy and Seznec, "Branch Prediction and the Performance of
-Interpreters: Don't Trust Folklore" (CGO 2015) found that on Haswell the
-single `switch` branch was predicted nearly as well. `perf stat -e
-branch-misses` on real hardware tells you what yours does.
+How much of the gap is prediction depends on the CPU. The classic result is
+Ertl and Gregg, "The Structure and Performance of Efficient Interpreters"
+(2003). Rohou, Swamy and Seznec, "Branch Prediction and the Performance of
+Interpreters: Don't Trust Folklore" (CGO 2015) found that modern predictors,
+which use global branch history, predict even the single `switch` branch
+well, so on recent cores much of what is left is instruction count. To split
+the two on a Mac, Instruments' CPU Counters template can count branch
+mispredictions for each build.
 
 ## Tiering
 
@@ -106,14 +109,15 @@ finds a live reference to a freed cell. The test suite runs every program
 this way.
 
 `--gc-log` prints one line per collection. From `bench/gc_live.tiny`, which
-grows a live list while making garbage (every fourth line, some columns trimmed):
+grows a live list while making garbage (every fourth line, some columns
+trimmed, on an M5):
 
 ```
-[gc] #1  live=524     heap=2048 cells    pause=0.012 ms
-[gc] #5  live=2096    heap=8192 cells    pause=0.048 ms
-[gc] #9  live=8584    heap=32768 cells   pause=0.222 ms
-[gc] #13 live=34636   heap=131072 cells  pause=0.895 ms
-[gc] #17 live=138844  heap=524288 cells  pause=3.696 ms
+[gc] #1  live=524     heap=2048 cells    pause=0.004 ms
+[gc] #5  live=2096    heap=8192 cells    pause=0.019 ms
+[gc] #9  live=8584    heap=32768 cells   pause=0.073 ms
+[gc] #13 live=34636   heap=131072 cells  pause=0.301 ms
+[gc] #17 live=138844  heap=524288 cells  pause=1.243 ms
 ```
 
 Pause time grows linearly with the heap. Mark is proportional to live data,

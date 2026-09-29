@@ -211,7 +211,12 @@ class Builder {
       }
       case SK::Assign: {
         int var = lookup(s.name, s.line);
-        write_var(var, cur, expr(*s.e));
+        // Evaluate first: `a || b` on the right moves `cur` to a new block,
+        // and C++ leaves the order of function arguments unspecified (gcc
+        // on x86-64 happened to evaluate this right to left, on arm64 left
+        // to right, which wrote the variable into the wrong block).
+        Inst* v = expr(*s.e);
+        write_var(var, cur, v);
         break;
       }
       case SK::ExprS: expr(*s.e); break;
