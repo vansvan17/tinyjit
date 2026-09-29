@@ -27,6 +27,9 @@ struct JitReloc {
   std::string symbol;
 };
 
+// Always true on x86-64 Linux; false where jit.cpp builds its stub.
+bool jit_supported();
+
 class JIT {
  public:
   JIT(VM& vm, std::vector<MFunc>& mir);

@@ -8,7 +8,16 @@ HDRS := $(wildcard src/*.h) src/interp.inc
 
 .PHONY: all clean test fuzz bench asm aot
 
+UNAME_S := $(shell uname -s)
+UNAME_M := $(shell uname -m)
+
+# The JIT and the ELF tools are x86-64 Linux only. On macOS (or arm64 Linux)
+# everything else builds and runs, with every function interpreted.
+ifeq ($(UNAME_S)-$(UNAME_M),Linux-x86_64)
 all: build/tinyjit build/elfdump
+else
+all: build/tinyjit
+endif
 
 build/tinyjit: $(OBJ)
 	$(CXX) $(CXXFLAGS) -o $@ $^

@@ -1,4 +1,9 @@
 #include "jit.h"
+
+// The JIT emits x86-64 code and writes ELF, so it is built only on x86-64
+// Linux. Everywhere else (macOS, arm64) a stub keeps the rest of the system
+// (parser, optimizer, VM, GC) working, with every function interpreted.
+#if defined(__x86_64__) && defined(__linux__) && !defined(TINYJIT_NO_JIT)
 #include <elf.h>
 #include <sys/mman.h>
 #include <chrono>
@@ -422,6 +427,8 @@ struct FnGen {
 
 }  // namespace
 
+bool jit_supported() { return true; }
+
 JIT::JIT(VM& vm, std::vector<MFunc>& mir) : vm_(vm), mir_(mir) {
   cap_ = 64 << 20;  // one region, so every call between JIT functions fits in rel32
   void* p = mmap(nullptr, cap_, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -641,3 +648,25 @@ bool JIT::write_elf(const std::string& path, std::string& err) const {
   fclose(fp);
   return true;
 }
+
+#else  // no JIT on this platform
+
+bool jit_supported() { return false; }
+
+JIT::JIT(VM& vm, std::vector<MFunc>& mir) : vm_(vm), mir_(mir) {}
+JIT::~JIT() {}
+bool JIT::collect_group(int, std::vector<char>&, std::vector<int>&) { return false; }
+bool JIT::compile(int fidx) {
+  vm_.funcs[fidx].jit_state = 2;
+  return false;
+}
+void JIT::compile_all() {
+  for (auto& f : vm_.funcs) f.jit_state = 2;
+}
+bool JIT::write_raw(const std::string&) const { return false; }
+bool JIT::write_elf(const std::string&, std::string& err) const {
+  err = "--emit-elf needs the JIT, which is only built on x86-64 Linux";
+  return false;
+}
+
+#endif

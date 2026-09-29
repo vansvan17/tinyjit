@@ -37,8 +37,12 @@ make asm             # the JIT's fib next to gcc -O0 and -O2
 make aot             # compile fib to an ELF object, link with cc, run it
 ```
 
-On macOS, including Apple Silicon, use the Dockerfile (the JIT emits x86-64
-and uses Linux `mmap`, and the ELF tools target Linux):
+On macOS, `make` and `make test` work natively (Xcode command line tools are
+enough). Everything runs except the JIT and the ELF tools, which emit x86-64
+Linux code: `--jit` falls back to the interpreter and `--emit-elf` reports
+that it is unavailable. For the full thing, including the JIT, cachegrind and
+the AOT link, use the Dockerfile. On Apple Silicon Docker emulates x86-64, so
+the JIT works but timings are not representative:
 
 ```
 docker build --platform linux/amd64 -t tinyjit . && docker run --rm -it --platform linux/amd64 tinyjit
@@ -261,7 +265,7 @@ aot/    runtime.c   for linking --emit-elf output
 
 ## Limitations
 
-- x86-64 Linux only. An arm64 backend would need its own encoder and
+- The JIT is x86-64 Linux only (elsewhere everything is interpreted). An arm64 backend would need its own encoder and
   calling convention; the MIR and register allocator would carry over.
 - The JIT does not compile functions that allocate (no GC stack maps), with
   more than six parameters (no stack-passed arguments), and there is no

@@ -44,7 +44,11 @@ def parse_expectations(src):
 
 def check_aot():
     """Compile a program to an ELF object, link it with aot/runtime.c, run it."""
+    import platform
     import shutil
+    if platform.system() != "Linux" or platform.machine() != "x86_64":
+        print("aot: skipped (needs x86-64 Linux)")
+        return 0
     cc = shutil.which("cc") or shutil.which("gcc")
     if not cc:
         print("aot: skipped (no C compiler)")

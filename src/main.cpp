@@ -143,6 +143,8 @@ int main(int argc, char** argv) {
   vm.heap.stress = gc_stress;
   vm.heap.log = gc_log;
   JIT jit(vm, mir);
+  if (!jit_supported() && jit_mode != "off" && stats)
+    fprintf(stderr, "[stats] note            JIT not available on this platform, running interpreted\n");
   jit.print_intervals = dump_ra;
   if (!emit_elf.empty()) {
     jit.compile_all();
