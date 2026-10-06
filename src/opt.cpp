@@ -1,11 +1,3 @@
-// Optimization passes over SSA.
-//
-// Because every value has exactly one definition, most passes are simple
-// worklist-free sweeps: fold an instruction whose operands are constants,
-// delete an instruction nobody uses, delete a block nobody reaches. Copy
-// propagation does not appear as a separate pass: the SSA builder never
-// emits copies (see ssa_builder.cpp), and a phi whose inputs are all the same
-// value is replaced by that value here and in the builder.
 #include <algorithm>
 #include <functional>
 #include <unordered_map>
@@ -24,7 +16,7 @@ void morph_const(Inst* i, Value v) {
 
 bool is_const(const Inst* i) { return i->op == Op::Const; }
 
-}  // namespace
+}
 
 void compute_known_int(Function& f) {
   std::vector<Inst*> phis;
@@ -35,11 +27,10 @@ void compute_known_int(Function& f) {
         case Op::Param: case Op::Call: case Op::Car: case Op::Cdr: case Op::Cons:
           i->known_int = false;
           break;
-        case Op::Phi: i->known_int = true; phis.push_back(i); break;  // optimistic
-        default: i->known_int = !is_term(i->op); break;  // arithmetic, compares, predicates
+        case Op::Phi: i->known_int = true; phis.push_back(i); break;
+        default: i->known_int = !is_term(i->op); break;
       }
     }
-  // Iterate to the greatest fixpoint: a phi is int if all of its inputs are.
   bool changed = true;
   while (changed) {
     changed = false;
@@ -88,7 +79,7 @@ std::unordered_map<const Block*, Block*> dominators(const Function& f) {
       int nd = -1;
       for (Block* p : rpo[i]->preds) {
         auto it = num.find(p);
-        if (it == num.end() || idom[it->second] < 0) continue;  // unreachable or not yet processed
+        if (it == num.end() || idom[it->second] < 0) continue;
         nd = nd < 0 ? it->second : intersect(it->second, nd);
       }
       if (nd != idom[i]) {
@@ -124,7 +115,6 @@ void prove_int_operands(Function& f) {
       i->int_ops = 0;
       for (size_t k = 0; k < i->ops.size() && k < 8; k++)
         if (i->ops[k]->known_int || proven.count(i->ops[k])) i->int_ops |= (uint8_t)(1u << k);
-      // Phi operands flow in from predecessors, not from this point.
       if (i->op == Op::Phi) i->int_ops = 0;
       if (traps_unless_int(i->op))
         for (Inst* o : i->ops)
@@ -147,7 +137,6 @@ bool fold_constants(Function& f, OptStats& st) {
           morph_const(i, mk_int(i->op == Op::Eq));
         } else if (is_const(i->ops[0]) && is_const(i->ops[1])) {
           BinOp bo = (BinOp)((int)i->op - (int)Op::Add);
-          // Leave trapping operations alone so the error still happens at run time.
           if (eval_binop(bo, (Value)i->ops[0]->k, (Value)i->ops[1]->k, out) != Trap::None) continue;
           morph_const(i, out);
         } else {
@@ -161,15 +150,13 @@ bool fold_constants(Function& f, OptStats& st) {
       } else if (i->op == Op::IsNil && is_const(i->ops[0])) {
         morph_const(i, mk_int((Value)i->ops[0]->k == NIL));
       } else if (i->op == Op::IsPair && is_const(i->ops[0])) {
-        morph_const(i, mk_int(0));  // constants are never pairs
+        morph_const(i, mk_int(0));
       } else {
         continue;
       }
       st.folded++;
       changed = true;
     }
-    // A phi whose inputs are equal constants becomes that constant. It has to
-    // move below the phi group, since non-phis cannot precede phis.
     for (int k = 0; k < b->num_phis();) {
       Inst* p = b->insts[k];
       bool ok = !p->ops.empty();
@@ -225,7 +212,6 @@ bool simplify_cfg(Function& f, OptStats& st) {
   bool any = false;
   for (bool changed = true; changed;) {
     changed = false;
-    // 1. Branches on constants and branches whose arms agree become jumps.
     for (Block* b : f.blocks) {
       Inst* t = b->term();
       if (t->op != Op::Br) continue;
@@ -233,7 +219,7 @@ bool simplify_cfg(Function& f, OptStats& st) {
       Block* drop;
       if (t->t == t->f) {
         keep = t->t;
-        drop = t->t;  // one of the two identical edges goes away
+        drop = t->t;
       } else if (is_const(t->ops[0])) {
         bool taken = t->ops[0]->k != 0;
         keep = taken ? t->t : t->f;
@@ -243,7 +229,6 @@ bool simplify_cfg(Function& f, OptStats& st) {
       }
       int idx = pred_index(drop, b);
       if (keep == drop) {
-        // Remove the second occurrence so the first keeps its phi operands.
         for (size_t j = idx + 1; j < drop->preds.size(); j++)
           if (drop->preds[j] == b) { idx = (int)j; break; }
       }
@@ -254,9 +239,7 @@ bool simplify_cfg(Function& f, OptStats& st) {
       t->f = nullptr;
       changed = true;
     }
-    // 2. Unreachable blocks.
     if (remove_unreachable(f, st)) changed = true;
-    // 3. Trivial phis.
     for (Block* b : f.blocks) {
       for (int k = 0; k < b->num_phis();) {
         Inst* p = b->insts[k];
@@ -276,8 +259,6 @@ bool simplify_cfg(Function& f, OptStats& st) {
         }
       }
     }
-    // 4. Merge a block into its only predecessor when that predecessor
-    //    jumps straight to it.
     for (size_t bi = 0; bi < f.blocks.size(); bi++) {
       Block* b = f.blocks[bi];
       if (b->removed) continue;
@@ -302,7 +283,7 @@ bool simplify_cfg(Function& f, OptStats& st) {
       c->removed = true;
       st.blocks_removed++;
       changed = true;
-      bi--;  // b may now be able to absorb its new successor too
+      bi--;
     }
     f.blocks.erase(std::remove_if(f.blocks.begin(), f.blocks.end(), [](Block* b) { return b->removed; }),
                    f.blocks.end());
@@ -318,14 +299,14 @@ static bool has_side_effect(const Inst* i) {
     case Op::Car: case Op::Cdr:
       return true;
     case Op::Add: case Op::Sub: case Op::Mul: case Op::Lt: case Op::Le: case Op::Gt: case Op::Ge:
-      return !both_int();  // may raise a type error
+      return !both_int();
     case Op::Neg:
       return !i->ops[0]->known_int;
     case Op::Div: case Op::Mod:
       return !(i->ops[0]->known_int && is_const(i->ops[1]) && is_int((Value)i->ops[1]->k) &&
                i->ops[1]->k != 0);
     default:
-      return false;  // const, param, phi, eq, ne, not, is_pair, is_nil, cons
+      return false;
   }
 }
 
@@ -359,7 +340,6 @@ bool dce(Function& f, OptStats& st) {
 
 void optimize_function(Function& f, int level, OptStats& st) {
   if (level <= 0) {
-    // Even at -O0, drop code after `return` so the backends never see it.
     remove_unreachable(f, st);
     verify(f);
     return;
@@ -375,16 +355,8 @@ void optimize_function(Function& f, int level, OptStats& st) {
   compute_known_int(f);
 }
 
-// ---------------------------------------------------------------- inlining
-
 namespace {
 
-// Replace `call` (in caller F) with a copy of G's body.
-//
-//   B: ... %r = call G(a, b) ...rest      B: ...  jmp G.entry'
-//                                  =>     G.entry' ... G's blocks, params -> a, b
-//                                         each `ret v` -> jmp Cont
-//                                         Cont: %r = phi(v...)  ...rest
 void inline_call(Function& F, Inst* call, const Function& G) {
   Block* B = call->bb;
   size_t at = std::find(B->insts.begin(), B->insts.end(), call) - B->insts.begin();
@@ -395,7 +367,7 @@ void inline_call(Function& F, Inst* call, const Function& G) {
     B->insts[k]->bb = cont;
     cont->insts.push_back(B->insts[k]);
   }
-  B->insts.resize(at);  // drops the call too; it is replaced below
+  B->insts.resize(at);
   for (Block* s : cont->succs())
     for (Block*& p : s->preds)
       if (p == B) p = cont;
@@ -448,7 +420,7 @@ void inline_call(Function& F, Inst* call, const Function& G) {
   if (rets.size() == 1) {
     result = rets[0].second;
   } else if (rets.empty()) {
-    result = F.make(Op::Const);  // callee never returns; cont is unreachable
+    result = F.make(Op::Const);
     result->k = (int64_t)mk_int(0);
     insert_at(cont, 0, result);
   } else {
@@ -459,8 +431,6 @@ void inline_call(Function& F, Inst* call, const Function& G) {
   call->removed = true;
   replace_all_uses(F, call, result);
 
-  // new_block() appended the clones and cont at the end. Move them right
-  // after B so dumps read top to bottom: B, callee body, cont, rest.
   std::vector<Block*> moved;
   for (Block* gb : G.blocks) moved.push_back(bm[gb]);
   moved.push_back(cont);
@@ -471,11 +441,10 @@ void inline_call(Function& F, Inst* call, const Function& G) {
   F.blocks.insert(pos, moved.begin(), moved.end());
 }
 
-}  // namespace
+}
 
 void inline_module(Module& m, int threshold, OptStats& st) {
   if (threshold <= 0) return;
-  // Callees first (postorder over the call graph).
   std::vector<int> order;
   std::vector<int> state(m.fns.size(), 0);
   std::function<void(int)> visit = [&](int fi) {

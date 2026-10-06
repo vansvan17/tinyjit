@@ -4,9 +4,9 @@
 #include "runtime.h"
 
 VM::VM() {
-  stack_size = 1 << 22;  // 4M registers, 32 MB of address space
+  stack_size = 1 << 22;
   stack = (Value*)calloc(stack_size, sizeof(Value));
-  max_frames = 200000;   // max call depth in the interpreter
+  max_frames = 200000;
   frames = (Frame*)calloc(max_frames, sizeof(Frame));
 }
 

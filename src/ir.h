@@ -1,7 +1,3 @@
-// SSA intermediate representation: a control flow graph of basic blocks.
-// Every instruction defines at most one value and is referred to by pointer.
-// Phis sit at the top of a block and have one operand per predecessor, in
-// the same order as Block::preds.
 #pragma once
 #include <cstdint>
 #include <memory>
@@ -28,11 +24,11 @@ struct Inst {
   Op op = Op::Const;
   Block* bb = nullptr;
   std::vector<Inst*> ops;
-  int64_t k = 0;            // Const: tagged value. Param: index. Call: callee index.
-  Block* t = nullptr;       // Jmp target / Br true target
-  Block* f = nullptr;       // Br false target
-  bool known_int = false;   // result is always a tagged int (set by analysis)
-  uint8_t int_ops = 0;      // bit k: operand k is proven int here (prove_int_operands)
+  int64_t k = 0;
+  Block* t = nullptr;
+  Block* f = nullptr;
+  bool known_int = false;
+  uint8_t int_ops = 0;
   bool removed = false;
 };
 
@@ -54,13 +50,13 @@ struct Function {
   int nparams = 0;
   std::vector<std::unique_ptr<Inst>> ipool;
   std::vector<std::unique_ptr<Block>> bpool;
-  std::vector<Block*> blocks;  // live blocks, entry first
+  std::vector<Block*> blocks;
   int next_inst = 0;
 
   Block* entry() const { return blocks[0]; }
   Inst* make(Op op);
   Block* new_block();
-  size_t size() const;  // instruction count, excluding phis and terminators
+  size_t size() const;
 };
 
 struct Module {
@@ -70,14 +66,13 @@ struct Module {
 
 std::string print_function(const Function& f);
 std::string print_module(const Module& m);
-void verify(const Function& f);  // aborts with a message on malformed IR
+void verify(const Function& f);
 
 void replace_all_uses(Function& f, Inst* from, Inst* to);
 void remove_inst(Inst* i);
-void remove_pred(Block* b, int idx);  // drops preds[idx] and the matching phi operands
+void remove_pred(Block* b, int idx);
 int pred_index(const Block* b, const Block* p);
 void insert_at(Block* b, size_t idx, Inst* i);
 
-// Frontend: AST -> SSA, using Braun et al. 2013.
 struct Program;
 Module build_ssa(const Program& p);

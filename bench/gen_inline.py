@@ -1,25 +1,8 @@
 #!/usr/bin/env python3
-"""Generate the inlining / instruction-cache benchmark.
-
-    leaves:  L small functions (~20 IR instructions each)
-    mids:    M functions, each calling K leaves
-    main:    a hot loop that picks one mid per iteration at pseudo-random,
-             through a binary tree of ifs (like a switch or a virtual call)
-
-Without inlining, the code the loop can reach is L leaves + M small mids +
-the dispatch tree: a few tens of KB, close to a 32 KB L1 instruction cache.
-With a threshold large enough to inline leaves into mids and mids into main,
-every arm of the dispatch tree carries its own copies of K leaves. Calls
-disappear, but the reachable code grows by roughly M*K/L and each iteration
-jumps somewhere different in it, so the icache keeps missing.
-
-    python3 bench/gen_inline.py > build/inline_bench.tiny
-"""
 import os
 import random
 import sys
 
-# Override with e.g. M=512 python3 bench/gen_inline.py
 L, M, K, ITERS = (int(os.environ.get(k, d)) for k, d in (("L", 16), ("M", 48), ("K", 8), ("ITERS", 60000)))
 rng = random.Random(7)
 out = []

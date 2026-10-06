@@ -1,13 +1,3 @@
-// Minimal runtime for linking an object from `tinyjit --emit-obj=prog.o`
-// into a standalone macOS executable:
-//
-//   build/tinyjit --emit-obj=prog.o prog.tiny
-//   cc aot/runtime.c prog.o -o prog && ./prog
-//
-// The object's calls into this file are `bl _rt_print` / `bl _rt_error`
-// with ARM64_RELOC_BRANCH26 relocations, which the linker resolves like any
-// other call. Only programs whose functions are all jittable (no cons) can
-// be linked this way, since allocating functions are never compiled.
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>

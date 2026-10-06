@@ -46,8 +46,6 @@ void Heap::collect() {
     if (!is_pair(v)) return;
     Pair* p = as_pair(v);
     if (p->header & FREE) {
-      // A root or field points at a cell we already freed. This is exactly
-      // the bug class --gc-stress exists to catch, so fail loudly.
       fprintf(stderr, "gc: live reference to a freed cell %p\n", (void*)p);
       abort();
     }

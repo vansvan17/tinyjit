@@ -1,10 +1,4 @@
 #!/usr/bin/env python3
-"""Benchmarks. Prints markdown tables (also saved to build/bench_results.md).
-
-Timings are the program's run time as reported by --stats, best of RUNS
-(default 5). Compile time is reported separately, since a JIT pays it while
-the program waits.
-"""
 import os
 import re
 import shutil

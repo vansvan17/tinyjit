@@ -4,7 +4,6 @@
 void print_value(FILE* out, Value v) {
   if (is_int(v)) { fprintf(out, "%lld", (long long)as_int(v)); return; }
   if (v == NIL) { fputs("nil", out); return; }
-  // Lists print as (1 2 3), improper tails as (1 2 . 3).
   fputc('(', out);
   bool first = true;
   while (is_pair(v)) {

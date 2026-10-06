@@ -1,12 +1,9 @@
-// Recursive descent for statements, Pratt parsing for expressions.
 #include <sstream>
 #include "ast.h"
 #include "lexer.h"
 
 namespace {
 
-// Binding powers. Higher binds tighter. All binary operators are left
-// associative, so the right operand is parsed with the operator's own power.
 int infix_bp(Tok t) {
   switch (t) {
     case Tok::OrOr: return 10;
@@ -274,7 +271,7 @@ void dump_stmts(std::ostringstream& o, const std::vector<std::unique_ptr<Stmt>>&
   for (auto& s : ss) dump_stmt(o, *s, ind);
 }
 
-}  // namespace
+}
 
 Program parse_program(const std::string& src) { return Parser(lex(src)).program(); }
 

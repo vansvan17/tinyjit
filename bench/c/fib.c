@@ -1,6 +1,3 @@
-// The same fib as bench/fib.tiny, for comparing generated code:
-//   cc -O0 -c fib.c && objdump -d fib.o
-//   cc -O2 -c fib.c && objdump -d fib.o
 #include <stdio.h>
 long fib(long n) {
   if (n < 2) return n;

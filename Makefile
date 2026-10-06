@@ -1,5 +1,3 @@
-# tinyjit targets Apple Silicon Macs. `make` needs only the Xcode command
-# line tools (xcode-select --install).
 CXX      ?= c++
 CC       ?= cc
 CXXFLAGS ?= -O2 -g -std=c++20 -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers -Wno-implicit-fallthrough
@@ -37,7 +35,6 @@ bench: all
 asm: all
 	bash tools/compare_asm.sh
 
-# Ahead-of-time: compile bench/fib.tiny to a Mach-O object and link it.
 aot: all
 	$(BUILD)/tinyjit --emit-obj=$(BUILD)/fib_aot.o bench/fib.tiny
 	$(CC) aot/runtime.c $(BUILD)/fib_aot.o -o $(BUILD)/fib_aot

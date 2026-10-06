@@ -1,20 +1,3 @@
-// machodump: a small Mach-O reader. Prints the header, load commands,
-// segments and sections, the symbol table and section relocations. Works on
-// the objects tinyjit writes and on real binaries (try /bin/ls, which is a
-// "universal" file holding both an x86_64 and an arm64 build).
-//
-// Mach-O in one paragraph: a 32-byte header (magic 0xfeedfacf for 64-bit,
-// CPU type, file type, number of load commands) is followed by a list of load
-// commands. Each starts with {cmd, cmdsize}, so a reader can skip the ones it
-// does not understand. LC_SEGMENT_64 describes a range of the file to map
-// (__TEXT, __DATA, ...) and the sections inside it (__text, __cstring, ...).
-// LC_SYMTAB points at an array of nlist_64 symbols and their string table.
-// Relocations live per section, found through the section's reloff/nreloc.
-// A universal ("fat") file is a big-endian table of per-architecture slices,
-// each of which is an ordinary Mach-O file.
-//
-// The structures are declared here rather than taken from <mach-o/loader.h>,
-// so the layout is on the page and the tool builds anywhere.
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -24,7 +7,7 @@
 #include <vector>
 
 static std::vector<uint8_t> data;
-static size_t base = 0;  // start of the Mach-O slice inside the file
+static size_t base = 0;
 
 template <class T>
 static T get(size_t off) {
@@ -78,7 +61,7 @@ static const char* filetype_name(uint32_t t) {
   }
 }
 static const char* cmd_name(uint32_t c) {
-  switch (c & 0x7FFFFFFF) {  // strip LC_REQ_DYLD
+  switch (c & 0x7FFFFFFF) {
     case 0x19: return "LC_SEGMENT_64";
     case 0x02: return "LC_SYMTAB";
     case 0x0B: return "LC_DYSYMTAB";
@@ -115,7 +98,6 @@ int main(int argc, char** argv) {
   data.assign(std::istreambuf_iterator<char>(in), {});
   if (data.size() < 32) { fprintf(stderr, "file too small\n"); return 1; }
 
-  // Universal binary: pick the arm64 slice (or the first one).
   uint32_t fat = be32(0);
   if (fat == 0xCAFEBABE || fat == 0xCAFEBABF) {
     bool is64 = fat == 0xCAFEBABF;

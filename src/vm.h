@@ -1,13 +1,3 @@
-// Register-based bytecode VM (in the style of Lua 5).
-//
-// Each function has a frame of `frame_size` registers on a shared Value
-// stack. Instructions name registers directly (ADD r3, r1, r2) rather than
-// pushing and popping, so a loop iteration runs far fewer instructions than
-// on a stack machine and the dispatch overhead drops accordingly.
-//
-// Calls: the caller writes arguments with ARG into the slots just past its
-// own frame, and CALL makes those slots registers 0..n-1 of the callee. No
-// copying on the callee side.
 #pragma once
 #include <cstdint>
 #include <string>
@@ -28,7 +18,6 @@ enum BOp : uint8_t {
   B_COUNT
 };
 
-// 12 bytes: opcode, three register operands, a 32-bit constant, a jump target.
 struct BIns {
   uint8_t op, a, b, c;
   int32_t k;
@@ -43,8 +32,8 @@ struct VMFunc {
   std::vector<BIns> code;
   std::vector<Value> consts;
   uint64_t calls = 0;
-  void* native = nullptr;   // set once the JIT has compiled this function
-  int jit_state = 0;        // 0 untried, 1 compiled, 2 not jittable
+  void* native = nullptr;
+  int jit_state = 0;
 };
 
 struct Frame {
@@ -61,13 +50,12 @@ struct VM {
   std::vector<VMFunc> funcs;
   std::vector<MFunc>* mir = nullptr;
   Heap heap;
-  // calloc'd so the OS hands out zero pages lazily: startup stays cheap.
   Value* stack = nullptr;
   size_t stack_size = 0;
   Frame* frames = nullptr;
   int max_frames = 0;
   bool goto_dispatch = true;
-  bool clear_frames = false;   // only needed when the program allocates
+  bool clear_frames = false;
   JIT* jit = nullptr;
   uint64_t jit_threshold = 100;
 

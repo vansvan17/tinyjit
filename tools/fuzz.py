@@ -1,19 +1,4 @@
 #!/usr/bin/env python3
-"""Differential fuzzer.
-
-Generates random tiny programs and runs each one under several
-configurations. The plain interpreter at -O0 is the reference; every other
-configuration (optimizer levels, inlining, eager and tiered JIT, GC stress)
-must print exactly the same output and exit with the same status.
-
-Programs always terminate: functions only call functions defined before them,
-and every loop has a counter the body cannot assign. Division uses
-`x / (y * y + 1)` because a square is never -1 modulo 2^63. A small fraction of
-programs deliberately hit a type error or division by zero to check that all
-backends fail the same way.
-
-    python3 tools/fuzz.py --count 500 --seed 1
-"""
 import argparse
 import os
 import random
@@ -21,8 +6,6 @@ import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-# TINYJIT overrides the command, e.g. TINYJIT="qemu-aarch64 build-arm64/tinyjit"
-# to test the arm64 JIT under emulation on another machine.
 BIN = os.environ.get("TINYJIT", os.path.join(ROOT, "build", "tinyjit")).split()
 
 REFERENCE = ["-O0", "--jit=off", "--dispatch=switch"]
@@ -41,7 +24,7 @@ class Gen:
     def __init__(self, rng, allow_errors):
         self.r = rng
         self.allow_errors = allow_errors
-        self.funcs = []  # (name, nparams, uses_lists)
+        self.funcs = []
 
     def const(self):
         r = self.r.random()

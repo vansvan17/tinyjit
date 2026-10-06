@@ -1,13 +1,3 @@
-// The interpreter loop. Included twice by vm.cpp:
-//   INTERP_GOTO=0  a `switch` inside `for (;;)`. Every instruction jumps back
-//                  to one shared indirect branch, which the CPU's predictor
-//                  sees as a single, very unpredictable branch.
-//   INTERP_GOTO=1  "computed goto" (a GCC/Clang extension). Each handler ends
-//                  with its own `goto *labels[op]`, so there is one indirect
-//                  branch per opcode and the predictor can learn pairs like
-//                  "after JLTK usually comes ADDK".
-// `perf stat -e branch-misses` shows the difference (see bench/).
-
 Value INTERP_NAME(VM& vm, int entry) {
   VMFunc* fn = &vm.funcs[entry];
   Value* base = vm.stack;
@@ -42,8 +32,6 @@ Value INTERP_NAME(VM& vm, int entry) {
 #else
 #define CASE(op) case op:
 #define DISPATCH() continue
-// No do/while(0) wrapper here: `continue` inside it would exit the do,
-// not restart the dispatch loop.
 #define NEXT() { ++pc; continue; }
   for (;;) {
     switch (pc->op) {
@@ -94,7 +82,7 @@ Value INTERP_NAME(VM& vm, int entry) {
     ARITHK(B_ADDK, x + y)
     ARITHK(B_SUBK, x - y)
     ARITHK(B_MULK, (uint64_t)as_int(x) * y)
-    ARITHK(B_DIVK, mk_int(as_int(x) / as_int(y)))   // divisor is a nonzero constant
+    ARITHK(B_DIVK, mk_int(as_int(x) / as_int(y)))
     ARITHK(B_MODK, mk_int(as_int(x) % as_int(y)))
     ARITHK(B_LTK, mk_int((int64_t)x < (int64_t)y))
     ARITHK(B_LEK, mk_int((int64_t)x <= (int64_t)y))
@@ -111,8 +99,6 @@ Value INTERP_NAME(VM& vm, int entry) {
     }
     CASE(B_NOT) R(pc->a) = mk_int(R(pc->b) == 0); NEXT();
     CASE(B_CONS) {
-      // Allocation may collect. Everything up to the end of this frame's
-      // outgoing-argument area is a root.
       vm.heap.roots_begin = vm.stack;
       vm.heap.roots_end = base + fn->frame_size + fn->max_args;
       R(pc->a) = vm.heap.alloc(R(pc->b), R(pc->c));

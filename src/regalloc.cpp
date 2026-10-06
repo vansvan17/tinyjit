@@ -12,8 +12,6 @@ using Bits = std::vector<uint64_t>;
 inline void bset(Bits& s, int v) { s[v >> 6] |= 1ull << (v & 63); }
 inline bool bget(const Bits& s, int v) { return (s[v >> 6] >> (v & 63)) & 1; }
 
-// Backward dataflow liveness over bitsets: in = use | (out - def),
-// out = union of successors' in.
 void liveness(const MFunc& f, std::vector<Bits>& in, std::vector<Bits>& out) {
   const int nb = (int)f.blocks.size();
   const int W = (f.nvregs + 63) / 64;
@@ -42,23 +40,20 @@ void liveness(const MFunc& f, std::vector<Bits>& in, std::vector<Bits>& out) {
   }
 }
 
-}  // namespace
+}
 
 int coalesce_moves(MFunc& f) {
   const int nv = f.nvregs;
   std::vector<Bits> in, out;
   liveness(f, in, out);
 
-  // Interference graph. Walk each block backwards keeping the live set; a
-  // definition interferes with everything live right after it, except that
-  // `mov d, s` does not make d interfere with s (they hold the same value).
   std::vector<std::unordered_set<int>> adj(nv);
   auto edge = [&](int a, int b) {
     if (a == b) return;
     adj[a].insert(b);
     adj[b].insert(a);
   };
-  std::vector<int> dense;           // sparse set: O(1) insert/erase/iterate
+  std::vector<int> dense;
   std::vector<int> where(nv, -1);
   auto add = [&](int v) { if (where[v] < 0) { where[v] = (int)dense.size(); dense.push_back(v); } };
   auto del = [&](int v) {
@@ -85,7 +80,6 @@ int coalesce_moves(MFunc& f) {
       for_each_use(x, add);
     }
   }
-  // Parameters are all defined together on entry.
   for (int i = 0; i < f.nparams; i++)
     for (int j = i + 1; j < f.nparams; j++)
       if (f.param_vreg[i] >= 0 && f.param_vreg[j] >= 0) edge(f.param_vreg[i], f.param_vreg[j]);
@@ -106,7 +100,7 @@ int coalesce_moves(MFunc& f) {
       int a = find(x.dst), b = find(x.a);
       if (a == b || adj[a].count(b)) continue;
       if (is_param[a] && is_param[b]) continue;
-      if (adj[a].size() < adj[b].size() || is_param[b]) std::swap(a, b);  // keep the param as root
+      if (adj[a].size() < adj[b].size() || is_param[b]) std::swap(a, b);
       parent[b] = a;
       is_param[a] |= is_param[b];
       for (int n : adj[b]) {
@@ -136,11 +130,6 @@ int coalesce_moves(MFunc& f) {
   return removed;
 }
 
-// Positions: instruction i reads its operands at 2i and writes its result at
-// 2i+1. So `v5 = add v3, v4` where v3 dies here gives v3 an interval ending at
-// 2i and v5 one starting at 2i+1; with strict `end < start` expiry the two can
-// share a register, while two values that are both live at the same point
-// never can.
 RAResult linear_scan(MFunc& f, const RAConfig& cfg) {
   RAResult r;
   const int nv = f.nvregs;
@@ -157,8 +146,6 @@ RAResult linear_scan(MFunc& f, const RAConfig& cfg) {
   liveness(f, in, out);
   auto get = bget;
 
-  // Conservative single-range intervals: from the first point the vreg is
-  // live or defined to the last point it is live or used.
   r.start.assign(nv, INT_MAX);
   r.end.assign(nv, -1);
   std::vector<char> used(nv, 0);
@@ -180,9 +167,6 @@ RAResult linear_scan(MFunc& f, const RAConfig& cfg) {
       if (x.op == MOp::Call || x.op == MOp::Print) calls.push_back(x.pos);
     }
   }
-  // Fixed-register hints: a value that is about to be passed as argument i
-  // would like to already be in the i-th argument register, so the parallel
-  // move before the call has nothing to do. Same for incoming parameters.
   std::vector<int> reg_hint(nv, -1);
   if (!cfg.arg_regs.empty()) {
     for (auto& b : f.blocks)
@@ -200,15 +184,15 @@ RAResult linear_scan(MFunc& f, const RAConfig& cfg) {
     int v = f.param_vreg[i];
     if (v < 0) continue;
     if (!used[v]) {
-      r.end[v] = -1;  // dead parameter: nothing to allocate
+      r.end[v] = -1;
       continue;
     }
     param_idx[v] = i;
-    r.start[v] = 0;  // all parameters arrive together at entry
+    r.start[v] = 0;
   }
   auto spans_call = [&](int v) {
     auto it = std::lower_bound(calls.begin(), calls.end(), r.start[v]);
-    return it != calls.end() && *it < r.end[v];  // live before and after the clobber
+    return it != calls.end() && *it < r.end[v];
   };
 
   std::vector<int> order;
@@ -229,7 +213,6 @@ RAResult linear_scan(MFunc& f, const RAConfig& cfg) {
   std::vector<char> callee_used(256, 0);
 
   for (int v : order) {
-    // Expire intervals that ended before this one starts.
     for (size_t k = 0; k < active.size();) {
       int a = active[k];
       if (r.end[a] < r.start[v]) {
@@ -264,7 +247,6 @@ RAResult linear_scan(MFunc& f, const RAConfig& cfg) {
         r.error = "function " + f.name + " needs more than " + std::to_string(cfg.order.size()) + " VM registers";
         return r;
       }
-      // Spill whichever candidate lives longest.
       int victim = -1;
       for (int a : active)
         if (allowed(r.reg[a]) && (victim < 0 || r.end[a] > r.end[victim])) victim = a;

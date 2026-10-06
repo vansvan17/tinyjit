@@ -58,7 +58,6 @@ static MOp to_mop(Op o) {
   }
 }
 
-// Is operand `v` of instruction `i` known to be an int at that point?
 static bool int_operand(const Inst* i, const Inst* v) {
   if (v->known_int) return true;
   for (size_t k = 0; k < i->ops.size() && k < 8; k++)
@@ -66,10 +65,6 @@ static bool int_operand(const Inst* i, const Inst* v) {
   return false;
 }
 
-// An edge B->S is critical when B has several successors and S several
-// predecessors. Phi copies for S have to run on exactly that edge, so such an
-// edge gets its own block to hold them. (Leaving the copies at the end of B
-// would run them on B's other edge too: the "lost copy" problem.)
 static void split_critical_edges(Function& f) {
   std::vector<Block*> blocks = f.blocks;
   for (Block* b : blocks) {
@@ -77,8 +72,6 @@ static void split_critical_edges(Function& f) {
     if (t->op != Op::Br || t->t == t->f) continue;
     for (Block** target : {&t->t, &t->f}) {
       Block* s = *target;
-      // Split even when s has one predecessor: copies placed before b's branch
-      // could otherwise clobber a value the branch itself reads.
       if (s->num_phis() == 0) continue;
       Block* e = f.new_block();
       e->sealed = true;
@@ -93,9 +86,6 @@ static void split_critical_edges(Function& f) {
   }
 }
 
-// Emit a parallel copy {dst_i <- src_i} as a sequence of moves. A move can go
-// once no other pending move still needs to read its destination; when only
-// cycles are left (a <- b, b <- a), one value is parked in a fresh vreg.
 static void sequentialize(std::vector<std::pair<int, int>> copies, MFunc& m, std::vector<MIns>& out) {
   copies.erase(std::remove_if(copies.begin(), copies.end(), [](auto& c) { return c.first == c.second; }),
                copies.end());
@@ -136,10 +126,6 @@ MFunc lower_to_mir(Function& f, bool fuse_and_imm) {
   m.nparams = f.nparams;
   m.param_vreg.assign(f.nparams, -1);
 
-  // Reverse postorder: every block comes after its dominator, loop bodies
-  // after their headers. Linear scan relies on this order being sensible.
-  // Successors are visited last-first so that `br c, then, else` lays out
-  // `then` right after the branch, and a loop body right after its header.
   std::vector<Block*> post;
   std::unordered_set<const Block*> seen{f.entry()};
   std::vector<std::pair<Block*, size_t>> stack{{f.entry(), 0}};
@@ -163,7 +149,6 @@ MFunc lower_to_mir(Function& f, bool fuse_and_imm) {
     for (Inst* i : b->insts)
       for (Inst* op : i->ops) uses[op]++;
 
-  // Instruction selection decisions.
   struct Sel { const Inst* a; const Inst* b; bool imm; MOp op; };
   std::unordered_map<const Inst*, Sel> sel;
   std::unordered_map<const Inst*, int> absorbed;
@@ -177,7 +162,7 @@ MFunc lower_to_mir(Function& f, bool fuse_and_imm) {
       auto ok = [&](const Inst* c) {
         return fuse_and_imm && c->op == Op::Const && c->k >= INT32_MIN && c->k <= INT32_MAX &&
                (is_int((Value)c->k) || op == MOp::Eq || op == MOp::Ne) &&
-               !(divmod && c->k == 0);  // x / 0 keeps its register form and traps at run time
+               !(divmod && c->k == 0);
       };
       bool imm = false;
       if (ok(y)) {
@@ -217,7 +202,7 @@ MFunc lower_to_mir(Function& f, bool fuse_and_imm) {
       MIns x{MOp::Mov};
       switch (i->op) {
         case Op::Phi:
-          continue;  // defined by the copies at the end of each predecessor
+          continue;
         case Op::Const:
           if (uses[i] - absorbed[i] <= 0) continue;
           x.op = MOp::Const;
@@ -265,7 +250,7 @@ MFunc lower_to_mir(Function& f, bool fuse_and_imm) {
               x.b = V(s.b);
               x.b_int = int_operand(i, s.b);
             }
-          } else {  // unary
+          } else {
             x.op = to_mop(i->op);
             x.dst = V(i);
             x.a = V(i->ops[0]);
@@ -274,9 +259,6 @@ MFunc lower_to_mir(Function& f, bool fuse_and_imm) {
       }
       push(std::move(x));
     }
-    // Phi copies for each successor. After critical edge splitting, a block
-    // with phi copies to make has exactly one successor, so the copies can
-    // sit at its end. They form one parallel copy per edge.
     for (Block* s : b->succs()) {
       if (s->num_phis() == 0) continue;
       int idx = pred_index(s, b);

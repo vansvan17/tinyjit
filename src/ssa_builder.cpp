@@ -1,15 +1,3 @@
-// AST -> SSA in one pass, following Braun, Buchwald, Hack, Leissa, Mallon,
-// Zwinkau, "Simple and Efficient Construction of Static Single Assignment
-// Form" (CC 2013).
-//
-// The idea: keep, per variable, the value it holds at the end of each block
-// (write_var). A read in a block with no local definition walks up to the
-// predecessors. A block is "sealed" once all its predecessors are known; reads
-// in unsealed blocks (loop headers) create an operandless phi that gets filled
-// in at seal time. Phis whose operands are all the same value (or the phi
-// itself) are trivial and are removed on the spot, which is also where the
-// copy propagation happens: an assignment `x = y` never creates an
-// instruction, it just maps x to y's value.
 #include <unordered_map>
 #include "ast.h"
 #include "ir.h"
@@ -42,20 +30,16 @@ class Builder {
     }
     stmts(d.body);
     ret(konst(mk_int(0)));
-    F->blocks.pop_back();  // the empty block ret() opened after the final return
+    F->blocks.pop_back();
   }
 
  private:
   Function* F;
   const std::unordered_map<std::string, Sig>& sigs;
   Block* cur = nullptr;
-  std::vector<std::unordered_map<Block*, Inst*>> defs;  // per variable
+  std::vector<std::unordered_map<Block*, Inst*>> defs;
   std::unordered_map<Block*, std::vector<std::pair<int, Inst*>>> incomplete;
   std::vector<std::unordered_map<std::string, int>> scopes;
-  // A phi can be found trivial and removed while a pointer to it is still
-  // held in a C++ local (e.g. the first argument of a call whose later
-  // arguments trigger the removal). Removed phis forward to their
-  // replacement so such pointers can be fixed up when they are finally used.
   std::unordered_map<Inst*, Inst*> forward;
 
   Inst* resolve(Inst* v) {
@@ -67,7 +51,6 @@ class Builder {
     return v;
   }
 
-  // ---- instruction helpers ----
   Inst* emit(Op op, std::vector<Inst*> ops = {}, int64_t k = 0) {
     Inst* i = F->make(op);
     for (Inst*& o : ops) o = resolve(o);
@@ -92,22 +75,16 @@ class Builder {
   }
   void ret(Inst* v) {
     emit(Op::Ret, {v});
-    // Anything after a return is unreachable. Keep lowering into a fresh
-    // block with no predecessors; simplify_cfg deletes it later.
     cur = F->new_block();
     cur->sealed = true;
   }
   Inst* undef() {
-    // Reading a variable on a path where it has no definition (only possible
-    // in unreachable code). Materialize 0 at the top of the entry block,
-    // which dominates everything.
     Inst* c = F->make(Op::Const);
     c->k = (int64_t)mk_int(0);
     insert_at(F->entry(), 0, c);
     return c;
   }
 
-  // ---- Braun et al. ----
   int new_var() { defs.emplace_back(); return (int)defs.size() - 1; }
   void write_var(int v, Block* b, Inst* val) { defs[v][b] = resolve(val); }
 
@@ -133,7 +110,6 @@ class Builder {
     } else if (b->preds.size() == 1) {
       val = read_var(v, b->preds[0]);
     } else {
-      // Write the phi first to break cycles through loops.
       val = new_phi(b);
       write_var(v, b, val);
       val = add_phi_operands(v, val);
@@ -143,7 +119,6 @@ class Builder {
   }
 
   Inst* add_phi_operands(int v, Inst* phi) {
-    // Copy preds: reading may not add edges, but be safe against aliasing.
     std::vector<Block*> preds = phi->bb->preds;
     for (Block* p : preds) phi->ops.push_back(read_var(v, p));
     for (Inst*& o : phi->ops) o = resolve(o);
@@ -152,12 +127,11 @@ class Builder {
 
   Inst* try_remove_trivial_phi(Inst* phi) {
     if (phi->removed) return phi;
-    // A phi that is still being filled in cannot be judged yet.
     if (phi->ops.size() != phi->bb->preds.size()) return phi;
     Inst* same = nullptr;
     for (Inst* op : phi->ops) {
       if (op == same || op == phi) continue;
-      if (same) return phi;  // merges at least two values: not trivial
+      if (same) return phi;
       same = op;
     }
     if (!same) same = undef();
@@ -184,7 +158,6 @@ class Builder {
     b->sealed = true;
   }
 
-  // ---- scopes ----
   int lookup(const std::string& name, int line) {
     for (auto it = scopes.rbegin(); it != scopes.rend(); ++it) {
       auto f = it->find(name);
@@ -193,7 +166,6 @@ class Builder {
     compile_error(line, "undefined variable " + name);
   }
 
-  // ---- statements ----
   void stmts(const std::vector<std::unique_ptr<Stmt>>& ss) {
     scopes.emplace_back();
     for (auto& s : ss) stmt(*s);
@@ -203,7 +175,7 @@ class Builder {
   void stmt(const Stmt& s) {
     switch (s.kind) {
       case SK::Let: {
-        Inst* v = expr(*s.e);  // evaluate before the name is in scope
+        Inst* v = expr(*s.e);
         int var = new_var();
         scopes.back()[s.name] = var;
         write_var(var, cur, v);
@@ -211,10 +183,6 @@ class Builder {
       }
       case SK::Assign: {
         int var = lookup(s.name, s.line);
-        // Evaluate first: `a || b` on the right moves `cur` to a new block,
-        // and C++ leaves the order of function arguments unspecified (gcc
-        // on x86-64 happened to evaluate this right to left, on arm64 left
-        // to right, which wrote the variable into the wrong block).
         Inst* v = expr(*s.e);
         write_var(var, cur, v);
         break;
@@ -245,7 +213,7 @@ class Builder {
       case SK::While: {
         Block* header = F->new_block();
         jmp(header);
-        cur = header;  // not sealed: the back edge is not known yet
+        cur = header;
         Inst* c = expr(*s.e);
         Block* body = F->new_block();
         Block* exit = F->new_block();
@@ -262,7 +230,6 @@ class Builder {
     }
   }
 
-  // ---- expressions ----
   Inst* expr(const Expr& e) {
     switch (e.kind) {
       case EK::Int: return konst(mk_int(e.ival));
@@ -278,8 +245,6 @@ class Builder {
         return emit((Op)((int)Op::Add + (int)e.bop), {a, b});
       }
       case EK::And: case EK::Or: {
-        // Short circuit through a temporary variable, so the join value is
-        // just another phi built by read_var. Result is normalized to 0/1.
         bool is_and = e.kind == EK::And;
         int tmp = new_var();
         Inst* a = expr(*e.kids[0]);
@@ -319,7 +284,7 @@ class Builder {
   }
 };
 
-}  // namespace
+}
 
 Module build_ssa(const Program& p) {
   Module m;

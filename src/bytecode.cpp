@@ -1,4 +1,3 @@
-// MIR + register assignment -> bytecode.
 #include <sstream>
 #include "regalloc.h"
 #include "vm.h"
@@ -42,7 +41,7 @@ bool compile_bytecode(MFunc& m, VMFunc& out, std::string& err) {
 
   auto R = [&](int v) { return (uint8_t)ra.reg[v]; };
   std::vector<int> block_pc(m.blocks.size());
-  std::vector<std::pair<size_t, int>> fix;  // (instruction index, target block)
+  std::vector<std::pair<size_t, int>> fix;
   auto emit = [&](uint8_t op, uint8_t a = 0, uint8_t b = 0, uint8_t c = 0, int32_t k = 0) {
     out.code.push_back({op, a, b, c, k, 0});
     return out.code.size() - 1;

@@ -1,14 +1,3 @@
-// ARM64 JIT for MIR, targeting Apple Silicon.
-//
-// Pipeline per function: MIR -> linear scan over 22 machine registers ->
-// instruction selection straight to A64 machine code -> a MAP_JIT region
-// that is writable or executable for this thread, never both at once.
-//
-// Compiled code follows the Apple arm64 calling convention (AAPCS64 with
-// Apple's changes, see docs/04-binary.md), so the interpreter calls it
-// through an ordinary C function pointer and it calls the C runtime
-// (rt_print, rt_error). A function is compiled together with everything it
-// can call, so compiled code never calls back into the interpreter.
 #include "jit.h"
 
 #if defined(__aarch64__) && (defined(__APPLE__) || defined(__linux__)) && !defined(TINYJIT_NO_JIT)
@@ -29,15 +18,6 @@
 
 namespace {
 
-// ---------------------------------------------------------------- memory
-//
-// macOS on Apple Silicon enforces W^X per thread: a MAP_JIT region is
-// mapped RWX once, and pthread_jit_write_protect_np() flips whether the
-// *current thread* sees it as writable or executable. Other platforms (Linux
-// arm64, used for testing under emulation) get the classic mprotect flip.
-// Either way the instruction cache has to be told about new code: ARM does
-// not keep it coherent with data writes, so without the flush the CPU can
-// execute stale bytes.
 #ifdef __APPLE__
 uint8_t* map_code(size_t n) {
   void* p = mmap(nullptr, n, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0);
@@ -65,19 +45,6 @@ void end_write(uint8_t* p, size_t n) {
 }
 #endif
 
-// ---------------------------------------------------------------- registers
-//
-// x0-x7    arguments and results                  caller-saved
-// x8       indirect result (unused here)           caller-saved
-// x9-x15   temporaries                             caller-saved
-// x16-x17  intra-procedure-call scratch (IP0/IP1)  may be clobbered by veneers
-// x18      platform register: reserved on Apple, never touched
-// x19-x28  callee-saved
-// x29 fp, x30 lr, sp
-//
-// Scratch for instruction selection: x9-x12, x16, x17. Everything else is
-// allocatable: 12 caller-saved and 10 callee-saved registers, against the 9
-// an x86-64 JIT gets after taking out its own scratch registers.
 const XReg kArgRegs[8] = {X0, X1, X2, X3, X4, X5, X6, X7};
 const XReg kAllocOrder[] = {X1,  X2,  X3,  X4,  X5,  X6,  X7,  X8,  X13, X14, X15, X0,
                             X19, X20, X21, X22, X23, X24, X25, X26, X27, X28};
@@ -87,12 +54,12 @@ struct Helper { const char* name; void* fn; };
 const Helper kHelpers[] = {{"rt_print", (void*)rt_print}, {"rt_error", (void*)rt_error}};
 enum { H_PRINT, H_ERROR, H_COUNT };
 
-constexpr uint32_t BRK = 0xD4200000;  // brk #0: padding that traps if executed
+constexpr uint32_t BRK = 0xD4200000;
 
 struct Loc {
   bool reg;
   XReg r;
-  int32_t off;  // [fp + off] when !reg
+  int32_t off;
 };
 
 Cond cond_of(MOp cc) {
@@ -108,26 +75,18 @@ Cond cond_of(MOp cc) {
 
 size_t align_up(size_t x, size_t a) { return (x + a - 1) / a * a; }
 
-// Code generation for one function.
-//
-// Frame layout (fp-relative), set up by the prologue:
-//   [fp + 8]            saved lr (return address)
-//   [fp]                caller's fp        <- fp points here
-//   [fp - 8 * (i+1)]    saved callee-saved register i
-//   [fp - 8 * (n+s+1)]  spill slot s   (n = number of saved registers)
-// sp stays 16-byte aligned throughout, which arm64 checks in hardware.
 struct FnGen {
   A64& a;
   MFunc& m;
   const RAResult& ra;
   std::vector<XReg> saved;
   std::vector<size_t> block_off;
-  std::vector<std::pair<size_t, int>> jumps;      // branch -> block
-  std::vector<size_t> type_err, div0, rets;       // branch -> stub / epilogue
-  std::vector<std::pair<size_t, int>> calls;      // bl -> function index
-  std::vector<std::pair<size_t, int>> helper_bls; // bl -> helper id
-  std::vector<size_t> literals;                   // word index of 64-bit literals
-  bool ok = true;                                 // false if a branch is out of range
+  std::vector<std::pair<size_t, int>> jumps;
+  std::vector<size_t> type_err, div0, rets;
+  std::vector<std::pair<size_t, int>> calls;
+  std::vector<std::pair<size_t, int>> helper_bls;
+  std::vector<size_t> literals;
+  bool ok = true;
 
   FnGen(A64& a, MFunc& m, const RAResult& ra) : a(a), m(m), ra(ra) {
     for (int r : ra.used_callee_saved) saved.push_back((XReg)r);
@@ -143,7 +102,6 @@ struct FnGen {
     a.ldr(scratch, FP, l.off);
     return scratch;
   }
-  // Where to compute a result: straight into its register, or X9 if spilled.
   XReg dst(int v) {
     Loc l = loc(v);
     return l.reg ? l.r : X9;
@@ -157,7 +115,6 @@ struct FnGen {
     a.tst1(r);
     type_err.push_back(a.b_cond(NE));
   }
-  // One test for two operands: (x | y) has a low bit iff either is a pointer.
   void guard_both(const MIns& x, XReg A, XReg B) {
     if (!x.a_int && !x.b_int) {
       a.orr(X12, A, B);
@@ -178,9 +135,6 @@ struct FnGen {
     }
   }
 
-  // Moves that happen "at once" (argument setup, parameter reception):
-  // memory destinations first, then register moves in dependency order with
-  // cycles (x1 <-> x2) broken through x16, then loads from stack slots.
   void parallel_move(std::vector<std::pair<Loc, Loc>> moves) {
     std::vector<std::pair<XReg, XReg>> rr;
     std::vector<std::pair<XReg, int32_t>> rm;
@@ -251,7 +205,6 @@ struct FnGen {
     a.pop_fp_lr();
     a.ret();
 
-    // Out-of-line error stubs, shared by every guard in the function.
     if (!type_err.empty()) {
       for (size_t at : type_err) ok &= a.patch(at, a.pos());
       a.movi(X0, RT_TYPE);
@@ -262,17 +215,13 @@ struct FnGen {
       a.movi(X0, RT_DIVZERO);
       call_helper(H_ERROR);
     }
-    // Trampolines to the C runtime. The runtime lives in the tinyjit binary,
-    // which can be further than bl's +-128 MB reach from the JIT region, so
-    // each `bl` goes to a stub in this function that loads the full 64-bit
-    // address from a literal and branches to it.
     size_t tramp[H_COUNT];
     bool used[H_COUNT] = {};
     for (auto& [at, h] : helper_bls) used[h] = true;
     for (int h = 0; h < H_COUNT; h++) {
       if (!used[h]) continue;
       tramp[h] = a.pos();
-      a.ldr_literal(X16, 2);  // x16 = the 8 bytes after the next instruction
+      a.ldr_literal(X16, 2);
       a.br(X16);
       literals.push_back(a.pos());
       a.quad((uint64_t)kHelpers[h].fn);
@@ -300,9 +249,6 @@ struct FnGen {
         break;
       }
       case MOp::Add: case MOp::Sub: case MOp::Mul: {
-        // Tagged arithmetic: (2x) + (2y) = 2(x+y), and (2x >> 1) * 2y = 2xy,
-        // so add/sub need no untagging and mul needs one shift. A64 is
-        // three-address, so the result goes straight to its register.
         XReg A = use(x.a, X10);
         XReg D = dst(x.dst);
         if (x.b_imm) {
@@ -326,12 +272,12 @@ struct FnGen {
         XReg B = use(x.b, X11);
         guard_both(x, A, B);
         div0.push_back(a.cbz(B));
-        a.asr(X12, A, 1);  // untag
+        a.asr(X12, A, 1);
         a.asr(X16, B, 1);
-        a.sdiv(X9, X12, X16);                                  // quotient, truncated
-        if (x.op == MOp::Mod) a.msub(X9, X9, X16, X12);       // x - q * y
+        a.sdiv(X9, X12, X16);
+        if (x.op == MOp::Mod) a.msub(X9, X9, X16, X12);
         XReg D = dst(x.dst);
-        a.lsl(D, X9, 1);  // retag
+        a.lsl(D, X9, 1);
         def(x.dst, D);
         break;
       }
@@ -362,7 +308,7 @@ struct FnGen {
       }
       case MOp::Car: case MOp::Cdr: {
         XReg A = use(x.a, X10);
-        a.tst1(A);  // ints have the low bit clear
+        a.tst1(A);
         type_err.push_back(a.b_cond(EQ));
         a.cmp_any(A, (int64_t)NIL, X11);
         type_err.push_back(a.b_cond(EQ));
@@ -434,30 +380,27 @@ struct FnGen {
     }
   }
 
-  // Division by a constant. For 2^k this is the shift sequence clang emits
-  // for `x / 8`: add 2^k - 1 to negative dividends so the arithmetic shift
-  // rounds toward zero like sdiv does.
   void gen_divmod_imm(const MIns& x) {
     int64_t d = as_int((Value)x.imm);
     XReg A = use(x.a, X10);
     if (!x.a_int) guard_int(A);
-    a.asr(X12, A, 1);  // untag: x
+    a.asr(X12, A, 1);
     XReg D = dst(x.dst);
     bool pow2 = d > 0 && (d & (d - 1)) == 0;
     int k = pow2 ? __builtin_ctzll((uint64_t)d) : 0;
-    if (pow2 && k == 0) {  // x / 1, x % 1
+    if (pow2 && k == 0) {
       if (x.op == MOp::Div) a.lsl(D, X12, 1);
       else a.movi(D, 0);
     } else if (pow2) {
       a.asr(X16, X12, 63);
-      a.lsr(X16, X16, 64 - k);  // 2^k - 1 if negative, else 0
+      a.lsr(X16, X16, 64 - k);
       a.add(X16, X16, X12);
-      a.asr(X16, X16, k);       // quotient
+      a.asr(X16, X16, k);
       if (x.op == MOp::Div) {
         a.lsl(D, X16, 1);
       } else {
         a.lsl(X16, X16, k);
-        a.sub(X16, X12, X16);   // remainder = x - q * 2^k
+        a.sub(X16, X12, X16);
         a.lsl(D, X16, 1);
       }
     } else {
@@ -483,12 +426,12 @@ struct FnGen {
   }
 };
 
-}  // namespace
+}
 
 bool jit_supported() { return true; }
 
 JIT::JIT(VM& vm, std::vector<MFunc>& mir) : vm_(vm), mir_(mir) {
-  cap_ = 64 << 20;  // one region, so every call between JIT functions fits in bl's +-128 MB
+  cap_ = 64 << 20;
   mem_ = map_code(cap_);
   if (!mem_) { perror("mmap"); exit(1); }
 }
@@ -536,7 +479,7 @@ bool JIT::compile(int fidx) {
   std::vector<size_t> literals;
   bool ok = true;
   for (int f : group) {
-    while (a.pos() % 4) a.emit(BRK);  // functions start on 16 bytes
+    while (a.pos() % 4) a.emit(BRK);
     off[f] = a.pos();
     RAResult ra = linear_scan(mir_[f], cfg);
     spills += ra.spilled;
@@ -551,13 +494,11 @@ bool JIT::compile(int fidx) {
   }
   size_t bytes = a.pos() * 4;
   size_t start = align_up(used_, 16);
-  if (!ok || start + bytes > cap_) {  // a function too big for b.cond's reach, or out of space
+  if (!ok || start + bytes > cap_) {
     for (int f : group) vm_.funcs[f].jit_state = 2;
     return false;
   }
 
-  // Resolve calls between JIT functions: bl to a function in this group, or
-  // to one compiled earlier (anywhere in the same 64 MB region).
   uint8_t* dest = mem_ + start;
   for (auto& [at, callee] : calls) {
     int64_t target = in_group[callee] ? (int64_t)off[callee]
@@ -566,10 +507,6 @@ bool JIT::compile(int fidx) {
     a.w[at] = (a.w[at] & 0xFC000000) | ((uint32_t)d & 0x03FFFFFF);
   }
 
-  // Code is packed back to back (16-byte aligned) so a hot loop's functions
-  // share cache lines and pages. Compilation only happens from the
-  // interpreter, never while JIT code is on the stack, so flipping pages to
-  // writable is safe.
   begin_write(mem_ + used_, start + bytes - used_);
   for (size_t p = used_; p < start; p += 4) memcpy(mem_ + p, &BRK, 4);
   memcpy(dest, a.w.data(), bytes);
@@ -600,27 +537,6 @@ bool JIT::write_raw(const std::string& path) const {
   fclose(fp);
   return true;
 }
-
-// ---------------------------------------------------------------- Mach-O
-//
-// A relocatable Mach-O object (MH_OBJECT) for arm64 holding all compiled
-// code, so `objdump -d -r` / `otool -tvV` can show it with symbol names and
-// `cc` can link it into an executable (see aot/runtime.c):
-//
-//   mach_header_64
-//   LC_SEGMENT_64    one unnamed segment with one section, __TEXT,__text
-//   LC_BUILD_VERSION platform macOS, so the linker does not warn
-//   LC_SYMTAB        where the symbol and string tables are
-//   LC_DYSYMTAB      which symbols are local / defined / undefined
-//   __text bytes, relocations, nlist_64 symbols, strings
-//
-// Calls into the runtime are `bl` instructions that, in memory, go to a
-// trampoline. In the object they instead carry an ARM64_RELOC_BRANCH26
-// relocation against _rt_print / _rt_error, and the linker points them at
-// the real function (adding its own stub if it is out of reach). The
-// trampolines stay in the file as dead code, with their addresses zeroed.
-// The structs are spelled out here instead of using <mach-o/loader.h> so the
-// layout is visible and the file also builds on Linux.
 
 namespace macho {
 #pragma pack(push, 4)
@@ -653,15 +569,13 @@ constexpr uint32_t PLATFORM_MACOS = 1;
 constexpr uint32_t S_ATTR_PURE_INSTRUCTIONS = 0x80000000, S_ATTR_SOME_INSTRUCTIONS = 0x400;
 constexpr uint8_t N_EXT = 0x01, N_SECT = 0x0E, N_UNDF = 0x0;
 constexpr uint32_t ARM64_RELOC_BRANCH26 = 2;
-}  // namespace macho
+}
 
 bool JIT::write_object(const std::string& path, std::string& err) const {
   using namespace macho;
   std::vector<uint8_t> text(mem_, mem_ + used_);
   for (size_t at : literals_) memset(&text[at], 0, 8);
 
-  // Symbols: defined functions first, then undefined helpers, each sorted
-  // by name (the order LC_DYSYMTAB describes).
   struct S { std::string name; bool defined; uint64_t value; };
   std::vector<S> defs, undefs;
   for (auto& s : syms_) defs.push_back({"_tiny_" + s.name, true, s.offset});
@@ -693,13 +607,11 @@ bool JIT::write_object(const std::string& path, std::string& err) const {
 
   std::vector<Reloc> rel;
   for (auto& r : relocs_) {
-    // The bl keeps its opcode with a zero offset; the linker fills it in.
     uint32_t insn = 0x94000000;
     memcpy(&text[r.offset], &insn, 4);
     uint32_t sym = 0;
     for (size_t i = 0; i < all.size(); i++)
       if (all[i].name == std::string("_") + r.symbol) sym = (uint32_t)i;
-    // r_symbolnum:24 r_pcrel:1 r_length:2 r_extern:1 r_type:4
     rel.push_back({(int32_t)r.offset, sym | 1u << 24 | 2u << 25 | 1u << 27 | ARM64_RELOC_BRANCH26 << 28});
   }
 
@@ -723,7 +635,7 @@ bool JIT::write_object(const std::string& path, std::string& err) const {
   strcpy(sec.segname, "__TEXT");
   sec.size = text.size();
   sec.offset = (uint32_t)text_off;
-  sec.align = 4;  // 2^4 = 16 bytes
+  sec.align = 4;
   sec.reloff = rel.empty() ? 0 : (uint32_t)rel_off;
   sec.nreloc = (uint32_t)rel.size();
   sec.flags = S_ATTR_PURE_INSTRUCTIONS | S_ATTR_SOME_INSTRUCTIONS;
@@ -759,7 +671,7 @@ bool JIT::write_object(const std::string& path, std::string& err) const {
   return true;
 }
 
-#else  // no JIT on this platform
+#else
 
 bool jit_supported() { return false; }
 

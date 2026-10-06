@@ -1,12 +1,4 @@
 #!/usr/bin/env python3
-"""Run every tests/cases/*.tiny under every execution configuration.
-
-Expected output lives in the test file itself:
-    print(x);   // expect: 42
-    print(y);   // expect-error: type error
-`expect-error` means: everything expected before it is printed, then the
-program exits with status 1 and stderr contains the message.
-"""
 import glob
 import os
 import re
@@ -14,8 +6,6 @@ import subprocess
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-# TINYJIT overrides the command, e.g. TINYJIT="qemu-aarch64 build-arm64/tinyjit"
-# to test the arm64 JIT under emulation on another machine.
 BIN = os.environ.get("TINYJIT", os.path.join(ROOT, "build", "tinyjit")).split()
 
 CONFIGS = [
@@ -45,7 +35,6 @@ def parse_expectations(src):
 
 
 def check_aot():
-    """Compile a program to a Mach-O object, link it with aot/runtime.c, run it."""
     import platform
     import shutil
     if platform.system() != "Darwin" or platform.machine() != "arm64":

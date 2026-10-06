@@ -1,17 +1,13 @@
-// Pause time grows with the live heap: mark touches every live cell and
-// sweep touches every cell in the heap, on every collection. This grows a
-// live structure 500 cells at a time while also making short-lived garbage.
-// (Results are printed so the optimizer cannot delete the allocations.)
 fn range(n) { let l = nil; while n > 0 { n = n - 1; l = cons(n, l); } return l; }
 fn main() {
   let live = nil;
   let i = 0;
   let acc = 0;
   while i < 400 {
-    live = cons(range(500), live);          // stays reachable
+    live = cons(range(500), live);
     let j = 0;
     while j < 20 {
-      let junk = range(100);                 // unreachable after this line
+      let junk = range(100);
       acc = acc + car(cdr(junk));
       j = j + 1;
     }

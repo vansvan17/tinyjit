@@ -11,8 +11,8 @@ struct Expr {
   EK kind;
   int line = 0;
   int64_t ival = 0;
-  std::string name;  // Var, Call
-  char uop = 0;      // Unary: '-' or '!'
+  std::string name;
+  char uop = 0;
   BinK bop = BinK::Add;
   std::vector<std::unique_ptr<Expr>> kids;
 };
@@ -22,10 +22,10 @@ enum class SK { Let, Assign, If, While, Return, ExprS, Block };
 struct Stmt {
   SK kind;
   int line = 0;
-  std::string name;              // Let, Assign
-  std::unique_ptr<Expr> e;       // value / condition / return value (may be null)
-  std::vector<std::unique_ptr<Stmt>> body;  // then-branch, loop body, block
-  std::vector<std::unique_ptr<Stmt>> els;   // else-branch
+  std::string name;
+  std::unique_ptr<Expr> e;
+  std::vector<std::unique_ptr<Stmt>> body;
+  std::vector<std::unique_ptr<Stmt>> els;
 };
 
 struct FnDecl {
